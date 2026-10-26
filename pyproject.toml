@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-etl-builder"
+version = "0.1.0"
+description = "Local-first agent for building validated ETL pipelines."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.162.0",
+    "pydantic>=2.14.1",
+    "uvicorn>=0.54.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/domain", "src/application", "src/infrastructure", "src/interfaces"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/main.py" = "main.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "README.md", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-config --strict-markers --import-mode=importlib --cov=src --cov-report=term-missing"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: tests that exercise an application or external boundary",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = [".venv", "artifacts", "logs"]
+
+[tool.ruff.lint]
+select = ["B", "C4", "E", "F", "I", "PT", "RUF", "S", "SIM", "TID", "UP"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+known-first-party = ["application", "domain", "infrastructure", "interfaces", "main"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+pretty = true
+show_error_codes = true
+warn_unreachable = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.2",
+]
