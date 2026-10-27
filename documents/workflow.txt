@@ -1,0 +1,62 @@
+flowchart TD
+    A[User message] --> B[Understand request and detect intent]
+    B --> C{Source only?}
+    C -- Yes --> S1[Validate source access/schema and retrieve assessment modules]
+    S1 --> S2{Readable and supported?}
+    S2 -- No --> F{Clarification/repair attempts left?}
+    S2 -- Yes --> S3[Run read-only assessment plan]
+    S3 --> S4{Assessment valid?}
+    S4 -- No --> F
+    S4 -- Yes --> S5[Derive issues and candidate transformations]
+    S5 --> S6[Build draft pipeline plan]
+    S6 --> S7[Present assessment, draft plan, and missing inputs]
+    S7 --> S8{Confirmed and inputs supplied?}
+    S8 -- No --> F
+    S8 -- Yes --> D[Build structured pipeline plan]
+    C -- No --> R[Retrieve relevant module definitions]
+    R --> D
+    D --> E{Plan schema valid?}
+    E -- No --> F
+    F -- No --> Z[Return actionable error]
+    F -- Yes --> G[Ask for clarification or repair plan]
+    G --> B
+    E -- Yes --> H[Validate registry, types, paths, security, and approval policy]
+    H --> I{Validation pass?}
+    I -- No --> F
+    I -- Yes --> J{Approval required?}
+    J -- Yes --> K[Human approval with timeout]
+    K -- Rejected or timed out --> Z
+    K -- Approved --> L[Store plan and local memory checkpoint]
+    J -- No --> L
+    L --> M[Execute validated plan via allowlisted interpreter in sandbox]
+    M --> N{Execution success?}
+    N -- No --> O{Retryable and attempts left?}
+    O -- Yes --> M
+    O -- No --> P[Persist failure/lineage and cleanup partial outputs]
+    N -- Yes --> Q[Persist result/lineage and cleanup]
+    P --> RET[Return result, logs, and next action]
+    Q --> RET
+    Z --> RET
+
+Termination and safety rules:
+- Source-only means a source is provided without a destination or requested transformations.
+  Run a read-only assessment and present a draft plan before execution.
+- Assessment is read-only and cannot write. It uses the same validated-plan interpreter.
+- Auto-run assessment for workspace files and existing configured read-only connections.
+  New secret-bearing connections require one-time approval.
+- Use a full scan for small sources and a bounded sample for large sources; record the scope
+  and mark sample-based metrics as approximate. Full scans of large sources are optional.
+- A draft plan may omit the destination. Request missing inputs before building an executable
+  plan; never default to a write.
+- Use only validated assessment values for plan synthesis; record rationale and assumptions.
+- Cache assessment results by content_hash and schema_hash; invalidate on change.
+- Maximum 3 clarification/repair attempts; after that return an actionable error.
+- Maximum 2 execution retries with bounded backoff; enforce an execution timeout.
+- Support cancellation at every waiting/running state and record the terminal state in
+  logs/artifacts.
+- Approval is required for writes, DDL, destructive transformations, and new secret-bearing
+  connections. Approval timeout is treated as rejection.
+- No arbitrary generated Python is executed. Validated plans run through the allowlisted
+  interpreter in a sandbox. Optional Python export is an artifact only.
+- Every terminal path records lineage/logs and cleans up temporary or partial artifacts.
+- A plan or registry version change invalidates the current plan and restarts validation.

@@ -3,8 +3,9 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1 project skeleton complete. ETL modules, plan validation, the LangGraph
-workflow, and MySQL adapters are not implemented yet.
+**Status:** FND-1, ST-1, and REG-1 complete. Five transformations are registered in the
+versioned allowlist. Plan validation, the LangGraph workflow, and MySQL adapters are not
+implemented yet.
 
 ## Architecture
 
@@ -84,6 +85,49 @@ Settings come from environment variables:
 Copy `.env.example` values into your shell or a local `.env` loader. Never commit `.env`
 files or secrets.
 
+## State persistence
+
+V1 uses a single LangGraph `InMemorySaver` created in `src/main.py` and exposed through
+`app.state.checkpointer`. Its lifetime is the current process.
+
+- State persists across turns and requests that use the same `thread_id`.
+- State is lost when the process stops; v1 has no cross-restart resume.
+- Each application process or worker has isolated state; do not run multiple workers when
+  conversation continuity is required.
+- Plans, lineage, and run artifacts must be persisted separately from checkpoints.
+- A persistent MySQL checkpointer is deferred to a later version.
+
+## Implemented transformations
+
+The first batch lives in `src/infrastructure/transformations/`. Each function returns a
+new DataFrame, validates its columns, preserves the input, and raises
+`TransformationError` with stable metadata.
+
+| Function | Behavior |
+|---|---|
+| `drop_duplicate_rows` | Drops duplicates by all or selected columns; keeps first or last. |
+| `drop_empty_rows` | Drops rows whose selected values are all null or blank text. |
+| `trim_whitespace` | Trims leading, trailing, or both whitespace styles in text columns. |
+| `standardize_column_names` | Produces collision-free snake_case names with case policy. |
+| `cast_column` | Casts one column to string, integer, or float with raise/coerce modes. |
+
+These modules are registered in registry version `1.0.0`. Registry integration lives in
+`src/infrastructure/registry/` and exposes metadata through
+`src/application/ports/module_registry.py`.
+
+## Module registry
+
+The registry is a static allowlist; it never imports module paths supplied by a user or
+model. At startup it derives input metadata from each callable signature and validates:
+
+- names, versions, module paths, and duplicate entries;
+- required/default inputs and declared constraints;
+- examples against input names, required values, types, and enums;
+- return annotations and declared dependencies;
+- exact registry/module versions at lookup time.
+
+Any drift raises `RegistryError` and prevents the application from starting.
+
 ## Security baseline
 
 - Generated code is never executed. The future interpreter will run only validated plans
@@ -115,5 +159,5 @@ documents/
 
 ## Roadmap
 
-The next backlog item is `ST-1`: wire the LangGraph local in-memory checkpointer and prove
-process-local restart behavior.
+The next P0 backlog item is `PLN-1`: build the plan schema and validator against the
+registry. Additional `TRN-0` transformation batches remain in progress.

@@ -1,0 +1,87 @@
+# Agent ETL Builder - Architecture
+
+Version: 0.8
+Status: REG-1 implemented; PLN-1 next; TRN-0 in progress
+Last updated: 2026-10-26
+Scope: Module and file organization only.
+
+## Clean architecture
+
+Dependency rule: source dependencies point inward. Domain code must not import
+LangGraph, FastAPI, pandas, MySQL drivers, or other infrastructure.
+
+| Layer | Responsibility |
+|---|---|
+| domain/entities | Plans, registry entries, runs, artifacts, approvals, errors |
+| application/use_cases | Assess sources, build/validate/execute plans, profile, merge, load, report, cancel |
+| infrastructure/adapters | MySQL, files, LLM providers, local-memory checkpointer, sandbox, logs |
+| interfaces/API | FastAPI routes and request/response schemas |
+
+V1 uses the LangGraph local in-memory checkpointer. Checkpoints are process-local and
+are lost when the process restarts. Multiple workers do not share checkpoints.
+
+## Components and modules
+
+- Module registry: approved functions, versions, inputs, outputs, side effects, and examples.
+- Plan builder/validator: schema, allowlist, arguments, paths, limits, security, approval.
+- Source assessor: read-only source validation, sampling, profiling, and draft-plan inputs.
+- Interpreter: executes validated steps by calling registry functions.
+- Ingestion adapters: CSV, JSON/JSONL, Parquet, and MySQL.
+- Profiling and chunk merger: quality/info metrics with mergeable per-chunk state.
+- Transformation DSL: cleansing, casting, standardization, filtering, and imputation.
+- Loaders: atomic file writes and transactional MySQL insert/upsert.
+- Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
+- State and lineage: local in-memory checkpoints; plans, approvals, hashes, logs, and
+  artifacts stored per run.
+- Agent workflow: source-only assessment, bounded clarification, validation, approval,
+  execution, retry, cancel.
+- Reports: escaped offline HTML summary from validated metrics.
+- API: run creation/status, approval, cancellation, logs, and health.
+
+## Data flow
+
+1. User submits a request and source context.
+2. Agent retrieves relevant registry entries and, for source-only requests, runs a
+   read-only assessment first.
+3. Validator checks schema, registry, arguments, paths, limits, security, and approval.
+4. Required writes/DDL/destructive actions wait for human approval.
+5. Interpreter executes the plan through adapters in a sandbox.
+6. Profiling and transformation steps save per-chunk records.
+7. Final chunk records are merged into metrics and outputs.
+8. Load and monitoring artifacts are written; lineage is saved.
+9. API returns status, results, logs, and the next action.
+
+## Source-only flow
+
+1. Detect a source-only request.
+2. Validate source access and schema.
+3. Run a read-only assessment using a full scan or bounded sample.
+4. Derive issues, candidate transformations, assumptions, and missing inputs.
+5. Present a draft plan; after confirmation, build and validate the executable plan.
+
+## Project layout
+
+- `src/domain/` entities and contracts.
+- `src/application/` use cases and ports.
+- `src/infrastructure/` MySQL, file, LLM, local-memory checkpointer, registry, sandbox, and
+  logging adapters.
+- `src/interfaces/` FastAPI routes and schemas.
+- `src/main.py` composition root.
+- `tests/` unit, integration, edge-case, and security tests.
+- `documents/` specifications and decisions.
+- `artifacts/<run_id>/` run outputs, transform log, profiles, and reports.
+- `logs/<run_id>.jsonl` execution log.
+- Root `README.md` and `pyproject.toml` before code starts.
+
+## Module and file flow
+
+- `interfaces/` receives requests and calls `application/` use cases.
+- `application/` assesses sources, builds and validates plans, then calls `infrastructure/`
+  adapters.
+- `infrastructure/` reads/writes MySQL and files, calls LLMs, checkpoints state, and runs
+  sandboxed steps.
+- `domain/` holds shared entities and validates core invariants.
+- Run artifacts and logs are written under `artifacts/<run_id>/` and `logs/`.
+- The registry, plan, transform log, and execution log are the boundaries between modules.
+- The source-only branch uses the assessment use case and writes only assessment artifacts;
+  it cannot write to the destination.

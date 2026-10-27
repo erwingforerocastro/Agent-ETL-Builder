@@ -8,7 +8,10 @@ build/
 dist/
 
 #Documents
-documents/
+documents/*
+!documents/backlog.txt
+!documents/architecture.txt
+!documents/workflow.txt
 
 # Tool caches
 .pytest_cache/
