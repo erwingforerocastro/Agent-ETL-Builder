@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pandas as pd
-
 from domain.entities.plan import (
     ExecutionPlan,
     PlanChunking,

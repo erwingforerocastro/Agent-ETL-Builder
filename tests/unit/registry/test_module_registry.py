@@ -53,12 +53,17 @@ def test_registry_metadata_matches_callable_signatures() -> None:
         if module.name != "save_csv":
             assert not module.side_effects
         assert module.examples
-        if module.name in ["drop_duplicate_rows", "drop_empty_rows", "trim_whitespace", "standardize_column_names", "cast_column", "save_csv"]:
+        if module.name in [
+            "drop_duplicate_rows",
+            "drop_empty_rows",
+            "trim_whitespace",
+            "standardize_column_names",
+            "cast_column",
+            "save_csv",
+        ]:
             assert [item.name for item in module.inputs if item.pipeline_input] == ["df"]
         elif module.name in ["read_csv"]:
             pass
-
-
 
         for item in module.inputs:
             parameter = signature.parameters[item.name]

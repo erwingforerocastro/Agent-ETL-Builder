@@ -1,8 +1,8 @@
 # Agent ETL Builder - Architecture
 
-Version: 0.8
-Status: REG-1 implemented; PLN-1 next; TRN-0 in progress
-Last updated: 2026-10-26
+Version: 0.9
+Status: PLN-1 implemented; EXE-1 next; TRN-0 in progress
+Last updated: 2026-10-27
 Scope: Module and file organization only.
 
 ## Clean architecture

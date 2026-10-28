@@ -1,18 +1,36 @@
 """Static allowlist and signature-derived metadata for approved modules."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import pandas as pd
 
 from domain.entities.registry import RegistrySnapshot
+from infrastructure.ingestion.csv import read_csv
+from infrastructure.loaders.csv import save_csv
 from infrastructure.registry.constants import (
     ALLOWED_MODULE_PREFIX,
     OUTPUT_DESCRIPTION,
     REGISTRY_VERSION,
 )
-from infrastructure.ingestion.csv import read_csv
-from infrastructure.loaders.csv import save_csv
+from infrastructure.registry.validators import (
+    DependencyValidator,
+    ExampleValidator,
+    ModuleMetadataBuilder,
+    RegistrySnapshotBuilder,
+    RegistryValidator,
+    SignatureValidator,
+    TypeValidator,
+    _annotation_to_text,
+    _format_default,
+    _metadata_for,
+    _registry_error,
+    _validate_default,
+    _validate_dependencies,
+    _validate_example_value,
+    _validate_examples,
+    _value_matches_type,
+)
 from infrastructure.transformations.cast_column import cast_column
 from infrastructure.transformations.drop_duplicates import drop_duplicate_rows
 from infrastructure.transformations.drop_empty_rows import drop_empty_rows
@@ -23,11 +41,28 @@ from infrastructure.transformations.trim_whitespace import trim_whitespace
 
 # Re-export for backward compatibility
 __all__ = [
-    "REGISTRY_VERSION",
     "ALLOWED_MODULE_PREFIX",
-    "OUTPUT_DESCRIPTION",
-    "ModuleSpec",
     "MODULE_SPECS",
+    "OUTPUT_DESCRIPTION",
+    "REGISTRY_VERSION",
+    "DependencyValidator",
+    "ExampleValidator",
+    "ModuleMetadataBuilder",
+    "ModuleSpec",
+    "RegistrySnapshotBuilder",
+    "RegistryValidator",
+    "SignatureValidator",
+    "TypeValidator",
+    "_annotation_to_text",
+    "_format_default",
+    "_metadata_for",
+    "_registry_error",
+    "_validate_default",
+    "_validate_dependencies",
+    "_validate_example_value",
+    "_validate_examples",
+    "_value_matches_type",
+    "build_snapshot",
 ]
 
 
@@ -139,51 +174,10 @@ MODULE_SPECS: tuple[ModuleSpec, ...] = (
 )
 
 
-# All validation logic moved to validators.py
-# All helper functions moved to functions.py
-# Constants moved to constants.py
-from infrastructure.registry.functions import build_snapshot
-from infrastructure.registry.validators import (
-    DependencyValidator,
-    ExampleValidator,
-    ModuleMetadataBuilder,
-    RegistrySnapshotBuilder,
-    RegistryValidator,
-    SignatureValidator,
-    TypeValidator,
-    _annotation_to_text,
-    _format_default,
-    _metadata_for,
-    _registry_error,
-    _validate_default,
-    _validate_dependencies,
-    _validate_example_value,
-    _validate_examples,
-    _value_matches_type,
-)
+def build_snapshot(
+    specs: Sequence[ModuleSpec] = MODULE_SPECS,
+) -> RegistrySnapshot:
+    """Build a snapshot without introducing a catalog/functions import cycle."""
+    from infrastructure.registry.functions import build_snapshot as _build_snapshot
 
-__all__ = [
-    "ALLOWED_MODULE_PREFIX",
-    "DependencyValidator",
-    "ExampleValidator",
-    "MODULE_SPECS",
-    "ModuleMetadataBuilder",
-    "ModuleSpec",
-    "OUTPUT_DESCRIPTION",
-    "REGISTRY_VERSION",
-    "RegistrySnapshotBuilder",
-    "RegistryValidator",
-    "SignatureValidator",
-    "TypeValidator",
-    "build_snapshot",
-    "_annotation_to_text",
-    "_format_default",
-    "_metadata_for",
-    "_registry_error",
-    "_validate_default",
-    "_validate_dependencies",
-    "_validate_example_value",
-    "_validate_examples",
-    "_value_matches_type",
-]
-
+    return _build_snapshot(specs)

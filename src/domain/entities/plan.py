@@ -1,6 +1,6 @@
 """Plan entities and value objects."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 
@@ -68,7 +68,7 @@ class ExecutionPlan:
     name: str
     description: str
     source: PlanSource | None
-    transformations: tuple[PlanTransformation, ...]
+    transformations: Sequence[PlanTransformation]
     destination: PlanDestination | None
     chunking: PlanChunking
     on_error: str

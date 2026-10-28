@@ -1,8 +1,8 @@
 # Agent ETL Builder - Backlog
 
-Version: 0.7
-Status: REG-1 complete; PLN-1 next; TRN-0 in progress
-Last updated: 2026-10-26
+Version: 0.8
+Status: PLN-1 complete; EXE-1 next; TRN-0 in progress
+Last updated: 2026-10-27
 
 Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 
@@ -13,7 +13,7 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 | ST-1 | P0 | Local-memory checkpointer | FND-1 | LangGraph in-memory checkpointer works; state is process-local; restart behavior is documented. | Done |
 | DB-1 | P1 | PostgreSQL connectivity | FND-1 | Connection, parameterized read/write, TLS configuration, and temporary test schema are tested. | Pending |
 | REG-1 | P0 | Module registry | FND-1 | Versioned allowlist, signature-derived metadata, examples, and contract tests are in place. | Done |
-| PLN-1 | P0 | Plan schema and validator | REG-1 | Schema, argument, path, limit, security, and approval validation reject unsafe plans. | Pending |
+| PLN-1 | P0 | Plan schema and validator | REG-1 | Schema, argument, path, limit, security, and approval validation reject unsafe plans. | Done |
 | EXE-1 | P0 | Interpreter and sandbox | PLN-1, ST-1 | Only validated steps run; no generated code; timeout, memory, filesystem, and network limits are tested. | Pending |
 | WF-1 | P0 | Bounded agent workflow | PLN-1, EXE-1 | Clarification, approval, execution, retry, cancel, and cleanup paths reach a terminal state. | Pending |
 | ING-1 | P1 | Ingestion adapters | FND-1, DB-1 | CSV, JSON/JSONL, Parquet, and PostgreSQL reads are read-only, chunked, and produce stable IDs. | Pending |

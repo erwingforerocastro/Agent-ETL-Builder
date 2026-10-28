@@ -15,4 +15,3 @@ def save_csv(df: pd.DataFrame, *, path: str = "output.csv") -> pd.DataFrame:
             message=str(exc),
             module=__name__,
         ) from exc
-

@@ -16,5 +16,3 @@ def read_csv(*, path: str = "input.csv", df: pd.DataFrame | None = None) -> pd.D
             message=str(exc),
             module=__name__,
         ) from exc
-
-

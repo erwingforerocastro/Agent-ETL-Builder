@@ -35,13 +35,12 @@ class PlanInterpreter:
                 df = self._sandbox.run(func, **plan.source.params)
             except TypeError:
                 try:
-                    df = self._sandbox.run(func, df, **plan.source.params) if df is not None else self._sandbox.run(func, **plan.source.params)
+                    if df is not None:
+                        df = self._sandbox.run(func, df, **plan.source.params)
+                    else:
+                        df = self._sandbox.run(func, **plan.source.params)
                 except Exception:
-                    try:
-                        df = self._sandbox.run(func, pd.DataFrame(), **plan.source.params)
-                    except Exception:
-                        raise
-
+                    df = self._sandbox.run(func, pd.DataFrame(), **plan.source.params)
 
         # Execute transformations
         for step in plan.transformations:
@@ -50,7 +49,7 @@ class PlanInterpreter:
             func = self._registry.function_for(step.operation)
             try:
                 df = self._sandbox.run(func, df, **step.params)
-            except Exception as exc:
+            except Exception:
                 if plan.on_error == "fail_fast":
                     raise
                 # continue on error

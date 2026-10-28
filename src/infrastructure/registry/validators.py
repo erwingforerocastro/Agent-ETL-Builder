@@ -1,19 +1,29 @@
 """Registry validation logic."""
 
+from __future__ import annotations
+
 import inspect
 import types
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from importlib.util import find_spec
-from typing import Literal, Union, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Literal, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
-from domain.entities.registry import ModuleInput, ModuleMetadata, ModuleOutput
+from domain.entities.registry import (
+    ModuleInput,
+    ModuleMetadata,
+    ModuleOutput,
+    RegistrySnapshot,
+)
 from domain.errors import RegistryError
 from infrastructure.registry.constants import (
     ALLOWED_MODULE_PREFIX,
     OUTPUT_DESCRIPTION,
 )
+
+if TYPE_CHECKING:
+    from infrastructure.registry.catalog import ModuleSpec
 
 
 class RegistryValidator:
@@ -41,9 +51,7 @@ class SignatureValidator:
     def __init__(self, error_factory: RegistryValidator | None = None) -> None:
         self._error_factory = error_factory or RegistryValidator()
 
-    def annotation_to_text(
-        self, annotation: object, *, module_name: str, input_name: str
-    ) -> str:
+    def annotation_to_text(self, annotation: object, *, module_name: str, input_name: str) -> str:
         if annotation is pd.DataFrame:
             return "DataFrame"
         if annotation is str:
@@ -63,9 +71,7 @@ class SignatureValidator:
             return "enum[" + "|".join(str(value) for value in args) + "]"
         if origin in {Union, types.UnionType}:
             rendered = tuple(
-                self.annotation_to_text(
-                    arg, module_name=module_name, input_name=input_name
-                )
+                self.annotation_to_text(arg, module_name=module_name, input_name=input_name)
                 for arg in args
             )
             if len(rendered) == 2 and "null" in rendered:
@@ -74,9 +80,7 @@ class SignatureValidator:
             return " | ".join(rendered)
         if origin in {Sequence, list, tuple}:
             item = (
-                self.annotation_to_text(
-                    args[0], module_name=module_name, input_name=input_name
-                )
+                self.annotation_to_text(args[0], module_name=module_name, input_name=input_name)
                 if args
                 else "unknown"
             )
@@ -173,7 +177,7 @@ class DependencyValidator:
     def __init__(self, error_factory: RegistryValidator | None = None) -> None:
         self._error_factory = error_factory or RegistryValidator()
 
-    def validate_dependencies(self, spec) -> None:
+    def validate_dependencies(self, spec: ModuleSpec) -> None:
         for dependency in spec.dependencies:
             if find_spec(dependency) is None:
                 raise self._error_factory.create_error(
@@ -198,7 +202,7 @@ class ExampleValidator:
     def validate_examples(
         self,
         *,
-        spec,
+        spec: ModuleSpec,
         inputs: tuple[ModuleInput, ...],
     ) -> None:
         by_name = {item.name: item for item in inputs}
@@ -268,7 +272,7 @@ class ModuleMetadataBuilder:
         self._example_validator = example_validator or ExampleValidator()
         self._error_factory = error_factory or RegistryValidator()
 
-    def metadata_for(self, spec) -> ModuleMetadata:
+    def metadata_for(self, spec: ModuleSpec) -> ModuleMetadata:
         self._dependency_validator.validate_dependencies(spec)
         if spec.name != spec.function.__name__:
             raise self._error_factory.create_error(
@@ -391,9 +395,11 @@ class RegistrySnapshotBuilder:
     def __init__(self, metadata_builder: ModuleMetadataBuilder | None = None) -> None:
         self._metadata_builder = metadata_builder or ModuleMetadataBuilder()
 
-    def build_snapshot(self, specs, registry_version: str = "1.0.0"):
-        from domain.entities.registry import RegistrySnapshot
-
+    def build_snapshot(
+        self,
+        specs: Sequence[ModuleSpec],
+        registry_version: str = "1.0.0",
+    ) -> RegistrySnapshot:
         names = [spec.name for spec in specs]
         if len(names) != len(set(names)):
             duplicates = sorted({name for name in names if names.count(name) > 1})
@@ -409,16 +415,19 @@ class RegistrySnapshotBuilder:
 
 
 # Backward compatible function aliases
-def _registry_error(*, code: str, message: str, context: Mapping[str, object] | None = None):
+def _registry_error(
+    *,
+    code: str,
+    message: str,
+    context: Mapping[str, object] | None = None,
+) -> RegistryError:
     factory = RegistryValidator()
     return factory.create_error(code=code, message=message, context=context)
 
 
 def _annotation_to_text(annotation: object, *, module_name: str, input_name: str) -> str:
     validator = SignatureValidator()
-    return validator.annotation_to_text(
-        annotation, module_name=module_name, input_name=input_name
-    )
+    return validator.annotation_to_text(annotation, module_name=module_name, input_name=input_name)
 
 
 def _format_default(value: object) -> str:
@@ -461,20 +470,20 @@ def _validate_default(
     )
 
 
-def _validate_dependencies(spec) -> None:
+def _validate_dependencies(spec: ModuleSpec) -> None:
     validator = DependencyValidator()
     validator.validate_dependencies(spec)
 
 
 def _validate_examples(
     *,
-    spec,
+    spec: ModuleSpec,
     inputs: tuple[ModuleInput, ...],
 ) -> None:
     validator = ExampleValidator()
     validator.validate_examples(spec=spec, inputs=tuple(inputs))
 
 
-def _metadata_for(spec) -> ModuleMetadata:
+def _metadata_for(spec: ModuleSpec) -> ModuleMetadata:
     builder = ModuleMetadataBuilder()
     return builder.metadata_for(spec)

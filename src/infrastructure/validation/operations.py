@@ -1,0 +1,94 @@
+"""Operation traversal and policy helpers for plan validation."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+
+from application.ports.module_registry import ModuleRegistryPort
+from domain.entities.plan import ExecutionPlan
+from domain.entities.registry import ModuleMetadata
+from infrastructure.validation.constants import (
+    DESTRUCTIVE_OPERATIONS,
+    WRITE_OPERATION_TOKENS,
+    WRITE_SIDE_EFFECT_TOKENS,
+)
+from infrastructure.validation.errors import PlanValidationErrorFactory
+
+
+@dataclass(frozen=True, slots=True)
+class OperationCall:
+    """One source, transformation, or destination call in a plan."""
+
+    label: str
+    operation: str
+    params: Mapping[str, object]
+
+
+def iter_operations(plan: ExecutionPlan) -> Iterator[OperationCall]:
+    """Yield every operation call in execution order."""
+    if plan.source is not None:
+        yield OperationCall(
+            label="source",
+            operation=plan.source.operation,
+            params=plan.source.params,
+        )
+    for step in plan.transformations:
+        yield OperationCall(
+            label=f"transformation[{step.step_id}]",
+            operation=step.operation,
+            params=step.params,
+        )
+    if plan.destination is not None:
+        yield OperationCall(
+            label="destination",
+            operation=plan.destination.operation,
+            params=plan.destination.params,
+        )
+
+
+class OperationPolicy:
+    """Looks up registry metadata and classifies operation side effects."""
+
+    def __init__(
+        self,
+        registry: ModuleRegistryPort,
+        error_factory: PlanValidationErrorFactory | None = None,
+    ) -> None:
+        self._registry = registry
+        self._error_factory = error_factory or PlanValidationErrorFactory()
+
+    def metadata(self, operation: str) -> ModuleMetadata:
+        metadata = self._registry.get(operation)
+        if metadata is None:
+            raise self._error_factory.error(
+                code="PLAN_UNKNOWN_OPERATION",
+                message="Operation is not allowlisted in the registry",
+                context={"operation": operation},
+            )
+        return metadata
+
+    def requires_approval(self, call: OperationCall) -> bool:
+        metadata = self.metadata(call.operation)
+        return self.is_write(call.operation, metadata) or self.is_destructive(
+            call.operation, call.params
+        )
+
+    def is_read_only(self, call: OperationCall, metadata: ModuleMetadata) -> bool:
+        return not self.is_write(call.operation, metadata) and not self.is_destructive(
+            call.operation, call.params
+        )
+
+    @staticmethod
+    def is_write(operation: str, metadata: ModuleMetadata) -> bool:
+        side_effects = " ".join(metadata.side_effects).lower()
+        if any(token in side_effects for token in WRITE_SIDE_EFFECT_TOKENS):
+            return True
+        operation_lower = operation.lower()
+        return any(token in operation_lower for token in WRITE_OPERATION_TOKENS)
+
+    @staticmethod
+    def is_destructive(operation: str, params: Mapping[str, object]) -> bool:
+        if operation in DESTRUCTIVE_OPERATIONS:
+            return True
+        return operation == "cast_column" and params.get("errors") == "coerce"

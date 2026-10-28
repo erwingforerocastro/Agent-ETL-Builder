@@ -3,14 +3,9 @@
 from infrastructure.registry.catalog import (
     ALLOWED_MODULE_PREFIX,
     MODULE_SPECS,
-    ModuleSpec,
     OUTPUT_DESCRIPTION,
     REGISTRY_VERSION,
-)
-from infrastructure.registry.constants import (
-    ALLOWED_MODULE_PREFIX as ALLOWED_MODULE_PREFIX,
-    OUTPUT_DESCRIPTION as OUTPUT_DESCRIPTION,
-    REGISTRY_VERSION as REGISTRY_VERSION,
+    ModuleSpec,
 )
 from infrastructure.registry.functions import build_snapshot
 from infrastructure.registry.module_registry import (
@@ -29,14 +24,14 @@ from infrastructure.registry.validators import (
 
 __all__ = [
     "ALLOWED_MODULE_PREFIX",
+    "MODULE_SPECS",
+    "OUTPUT_DESCRIPTION",
+    "REGISTRY_VERSION",
     "DependencyValidator",
     "ExampleValidator",
-    "MODULE_SPECS",
     "ModuleMetadataBuilder",
     "ModuleRegistry",
     "ModuleSpec",
-    "OUTPUT_DESCRIPTION",
-    "REGISTRY_VERSION",
     "RegistrySnapshotBuilder",
     "RegistryValidator",
     "SignatureValidator",
@@ -44,4 +39,3 @@ __all__ = [
     "build_module_registry",
     "build_snapshot",
 ]
-

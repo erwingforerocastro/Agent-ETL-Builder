@@ -3,9 +3,10 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1, ST-1, and REG-1 complete. Five transformations are registered in the
-versioned allowlist. Plan validation, the LangGraph workflow, and PostgreSQL adapters are not
-implemented yet.
+**Status:** FND-1, ST-1, REG-1, and PLN-1 complete. Five transformations are registered in
+the versioned allowlist, and structured plans are validated before execution. The bounded
+LangGraph workflow, full sandbox limit enforcement, and PostgreSQL adapters are not implemented
+yet.
 
 ## Architecture
 
@@ -128,10 +129,29 @@ model. At startup it derives input metadata from each callable signature and val
 
 Any drift raises `RegistryError` and prevents the application from starting.
 
+## Plan validation
+
+Structured plans use a strict Pydantic schema (`extra="forbid"`) in
+`src/infrastructure/validation/plan_schema.py`. `PlanValidator` then checks, in order:
+
+1. schema, mode, and step identifiers;
+2. registry allowlist and assessment read-only rules;
+3. required, optional, unknown, and pipeline-managed arguments, including types and enums;
+4. workspace-confined paths (traversal, absolute paths, symlinks, Windows reserved names,
+   control characters, and overlong paths);
+5. step count, chunk size, and serialized plan size;
+6. unsafe code, raw SQL, and embedded credentials;
+7. approval for writes, DDL, destructive transformations, and secret-bearing operations.
+
+`PlanValidator` accepts either an `ExecutionPlan` or a JSON-compatible plan payload. Every
+failure raises `PlanValidationError` with a stable code and sanitized context. Validation
+checks are independent `PlanCheck` implementations assembled by `build_default_checks`;
+callers can inject a custom pipeline with `PlanValidator(..., checks=(...))`.
+
 ## Security baseline
 
-- Generated code is never executed. The future interpreter will run only validated plans
-  through allowlisted registry functions.
+- Generated code is never executed. The interpreter runs only validated plans through
+  allowlisted registry functions.
 - Secrets belong in environment variables or a secret store and must be redacted from
   logs, errors, prompts, reports, and artifacts.
 - Source data and user context are untrusted; profiling artifacts are read-only.
@@ -159,5 +179,6 @@ documents/
 
 ## Roadmap
 
-The next P0 backlog item is `PLN-1`: build the plan schema and validator against the
-registry. Additional `TRN-0` transformation batches remain in progress.
+The next P0 backlog item is `EXE-1`: complete interpreter and sandbox enforcement, including
+timeout, memory, filesystem, and network limits with tests. Additional `TRN-0` transformation
+batches remain in progress.

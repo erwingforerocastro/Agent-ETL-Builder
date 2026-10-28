@@ -1,6 +1,7 @@
 """Application-facing module registry contract."""
 
-from typing import Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 from domain.entities.registry import ModuleMetadata, RegistrySnapshot
 
@@ -21,5 +22,12 @@ class ModuleRegistryPort(Protocol):
         *,
         version: str | None = None,
     ) -> ModuleMetadata: ...
+
+    def function_for(
+        self,
+        name: str,
+        *,
+        version: str | None = None,
+    ) -> Callable[..., Any]: ...
 
     def ensure_version(self, expected_version: str) -> None: ...
