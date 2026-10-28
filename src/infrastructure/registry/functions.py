@@ -5,15 +5,14 @@ from collections.abc import Callable, Mapping, Sequence
 import pandas as pd
 
 from application.registry.constants import REGISTRY_VERSION
-from application.registry.specs import MODULE_SPECS, ModuleSpec
+from application.registry.specs import ModuleSpec
 from domain.entities.registry import RegistrySnapshot
-from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.validators import RegistrySnapshotBuilder
 
 
 def build_snapshot(
-    specs: Sequence[ModuleSpec] = MODULE_SPECS,
-    functions: Mapping[str, Callable[..., pd.DataFrame]] = MODULE_FUNCTIONS,
+    specs: Sequence[ModuleSpec],
+    functions: Mapping[str, Callable[..., pd.DataFrame]],
 ) -> RegistrySnapshot:
     """Build a registry snapshot from specs and their bound callables."""
     builder = RegistrySnapshotBuilder()

@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from domain.errors import TransformationError
+from domain.errors import IngestionError
 
 
 def read_csv(*, path: str = "input.csv", df: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -11,8 +11,9 @@ def read_csv(*, path: str = "input.csv", df: pd.DataFrame | None = None) -> pd.D
             return df.copy()
         return pd.read_csv(path)
     except Exception as exc:
-        raise TransformationError(
+        raise IngestionError(
             code="INGESTION_FAILED",
-            message=str(exc),
+            message="CSV ingestion failed",
             module=__name__,
+            context={"path": path},
         ) from exc

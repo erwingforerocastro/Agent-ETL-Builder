@@ -6,15 +6,8 @@ from contextlib import contextmanager
 from types import FrameType
 from typing import Any, cast
 
+from infrastructure.sandbox.errors import SandboxTimeoutError
 from infrastructure.sandbox.limits import SandboxLimits
-
-
-class SandboxTimeoutError(Exception):
-    pass
-
-
-class SandboxViolationError(Exception):
-    pass
 
 
 @contextmanager
@@ -32,7 +25,7 @@ def timeout_context(seconds: float) -> Iterator[None]:
         return
 
     def handler(signum: int, frame: FrameType | None) -> None:
-        raise SandboxTimeoutError("Execution timed out")
+        raise SandboxTimeoutError(message="Execution timed out")
 
     alarm_fn = cast(Callable[[int], int], alarm)
     old_handler = signal.signal(cast(int, sigalrm), handler)

@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 
 from application.ports.module_registry import ModuleRegistryPort
+from application.ports.plan_sizer import PlanSizerPort
 from application.ports.plan_validator import PlanValidatorPort
+from application.ports.workspace import WorkspaceProbePort
 from application.validation.errors import PlanValidationErrorFactory
 from application.validation.plan_check import PlanCheck
 from application.validation.plan_validator import PlanValidator as CorePlanValidator
 from domain.entities.plan import ExecutionPlan
 from domain.errors import PlanValidationError
-from infrastructure.validation.path_probe import FilesystemWorkspaceProbe
 from infrastructure.validation.plan_schema import parse_plan
 
 
@@ -23,7 +23,8 @@ class PlanValidator(PlanValidatorPort):
         self,
         registry: ModuleRegistryPort,
         *,
-        workspace_root: Path | str | None = None,
+        workspace: WorkspaceProbePort,
+        sizer: PlanSizerPort | None = None,
         max_steps: int = 100,
         max_chunk_size: int = 10_000_000,
         max_plan_bytes: int = 1_000_000,
@@ -33,11 +34,11 @@ class PlanValidator(PlanValidatorPort):
         checks: Sequence[PlanCheck] | None = None,
         error_factory: PlanValidationErrorFactory | None = None,
     ) -> None:
-        root = Path(workspace_root) if workspace_root is not None else Path.cwd()
         self._error_factory = error_factory or PlanValidationErrorFactory(module=__name__)
         self._validator = CorePlanValidator(
             registry,
-            workspace=FilesystemWorkspaceProbe(root),
+            workspace=workspace,
+            sizer=sizer,
             max_steps=max_steps,
             max_chunk_size=max_chunk_size,
             max_plan_bytes=max_plan_bytes,

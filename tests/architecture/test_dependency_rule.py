@@ -28,6 +28,18 @@ FRAMEWORK_MODULES = frozenset(
     }
 )
 
+FORBIDDEN_CORE_NAMES = frozenset({"infrastructure.", "pandas"})
+
+COMPOSITION_ONLY_CALLS = frozenset(
+    {
+        "ExecutePlanUseCase",
+        "FilesystemWorkspaceProbe",
+        "JsonPlanSizer",
+        "SandboxStepRunner",
+        "build_module_registry",
+    }
+)
+
 
 def _layer_for(path: Path) -> str | None:
     relative = path.relative_to(PACKAGE_ROOT)
@@ -78,6 +90,47 @@ def test_core_layers_do_not_import_frameworks() -> None:
                 violations.append(f"{path.relative_to(PACKAGE_ROOT)} imports {imported}")
 
     assert not violations, "Framework imports in core layers:\n" + "\n".join(sorted(violations))
+
+
+def test_core_layers_do_not_name_outer_details() -> None:
+    violations: list[str] = []
+
+    for path in PACKAGE_ROOT.rglob("*.py"):
+        layer = _layer_for(path)
+        if layer not in {"domain", "application"}:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            for forbidden in FORBIDDEN_CORE_NAMES:
+                if forbidden in node.value:
+                    violations.append(f"{path.relative_to(PACKAGE_ROOT)} names {forbidden!r}")
+
+    assert not violations, "Outer-layer names in core layers:\n" + "\n".join(sorted(violations))
+
+
+def _call_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def test_infrastructure_does_not_construct_outer_components() -> None:
+    violations: list[str] = []
+
+    for path in (PACKAGE_ROOT / "infrastructure").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = _call_name(node.func)
+            if name in COMPOSITION_ONLY_CALLS:
+                violations.append(f"{path.relative_to(PACKAGE_ROOT)} constructs {name}")
+
+    assert not violations, "Hidden composition in infrastructure:\n" + "\n".join(sorted(violations))
 
 
 def _module_name(path: Path) -> str:

@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from application.ports.module_registry import ModuleRegistryPort
+from application.registry.specs import MODULE_SPECS
 from domain.entities.plan import (
     ExecutionPlan,
     PlanChunking,
@@ -20,8 +21,11 @@ from domain.entities.registry import (
     ModuleOutput,
     RegistrySnapshot,
 )
+from domain.errors import PlanValidationError
+from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.module_registry import build_module_registry
-from infrastructure.validation.errors import PlanValidationError
+from infrastructure.validation.path_probe import FilesystemWorkspaceProbe
+from infrastructure.validation.plan_sizer import JsonPlanSizer
 from infrastructure.validation.plan_validator import PlanValidator
 
 _DEFAULT_SOURCE = PlanSource(operation="read_csv", params={"path": "input.csv"})
@@ -76,8 +80,9 @@ def _validator(
     max_path_length: int = 260,
 ) -> PlanValidator:
     return PlanValidator(
-        build_module_registry(),
-        workspace_root=workspace,
+        build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS),
+        workspace=FilesystemWorkspaceProbe(workspace),
+        sizer=JsonPlanSizer(),
         max_steps=max_steps,
         max_chunk_size=max_chunk_size,
         max_plan_bytes=max_plan_bytes,
@@ -127,7 +132,7 @@ def _fake_module(
         description="Fake module for validation tests.",
         inputs=tuple(inputs),
         output=ModuleOutput(type="DataFrame", description="DataFrame"),
-        dependencies=("pandas",),
+        dependencies=("dataframe",),
         side_effects=side_effects,
         examples=(),
         supports_chunking=False,
@@ -139,7 +144,11 @@ def _fake_module(
 
 def _fake_validator(module: ModuleMetadata, workspace: Path) -> PlanValidator:
     registry = cast(ModuleRegistryPort, _StubRegistry((module,)))
-    return PlanValidator(registry, workspace_root=workspace)
+    return PlanValidator(
+        registry,
+        workspace=FilesystemWorkspaceProbe(workspace),
+        sizer=JsonPlanSizer(),
+    )
 
 
 class _RecordingCheck:
@@ -153,8 +162,8 @@ class _RecordingCheck:
 def test_injected_checks_replace_default_pipeline(tmp_path: Path) -> None:
     check = _RecordingCheck()
     validator = PlanValidator(
-        build_module_registry(),
-        workspace_root=tmp_path,
+        build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS),
+        workspace=FilesystemWorkspaceProbe(tmp_path),
         checks=(check,),
     )
     plan = make_plan()

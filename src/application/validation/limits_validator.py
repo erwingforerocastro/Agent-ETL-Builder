@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
-from typing import NoReturn
-
+from application.ports.plan_sizer import PlanSizerPort
 from application.validation.errors import PlanValidationErrorFactory
 from application.validation.settings import PlanValidationSettings
-from domain.entities.plan import ExecutionPlan, PlanDestination, PlanSource
+from domain.entities.plan import ExecutionPlan
 
 
 class LimitsValidator:
@@ -16,9 +14,11 @@ class LimitsValidator:
     def __init__(
         self,
         settings: PlanValidationSettings,
+        sizer: PlanSizerPort,
         error_factory: PlanValidationErrorFactory | None = None,
     ) -> None:
         self._settings = settings
+        self._sizer = sizer
         self._error_factory = error_factory or PlanValidationErrorFactory()
 
     def validate(self, plan: ExecutionPlan) -> None:
@@ -46,63 +46,10 @@ class LimitsValidator:
                 },
             )
 
-        size = len(serialize_plan(plan, self._error_factory))
+        size = self._sizer.size_bytes(plan)
         if size > self._settings.max_plan_bytes:
             raise self._error_factory.error(
                 code="PLAN_TOO_LARGE",
                 message="Plan exceeds the maximum serialized size",
                 context={"bytes": size, "max_bytes": self._settings.max_plan_bytes},
             )
-
-
-def serialize_plan(
-    plan: ExecutionPlan,
-    error_factory: PlanValidationErrorFactory,
-) -> bytes:
-    """Serialize a plan to compact UTF-8 JSON for size validation."""
-    payload: dict[str, object] = {
-        "plan_version": plan.plan_version,
-        "mode": plan.mode,
-        "run_id": plan.run_id,
-        "name": plan.name,
-        "description": plan.description,
-        "source": _operation_payload(plan.source),
-        "transformations": [
-            {
-                "step_id": step.step_id,
-                "operation": step.operation,
-                "params": dict(step.params),
-            }
-            for step in plan.transformations
-        ],
-        "destination": _operation_payload(plan.destination),
-        "chunking": {"enabled": plan.chunking.enabled, "size": plan.chunking.size},
-        "on_error": plan.on_error,
-        "approval_required": plan.approval_required,
-    }
-    try:
-        text = json.dumps(
-            payload,
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-            default=_json_default,
-        )
-    except (TypeError, ValueError) as exc:
-        raise error_factory.error(
-            code="PLAN_UNSERIALIZABLE",
-            message="Plan contains values that cannot be serialized safely",
-        ) from exc
-    return text.encode("utf-8")
-
-
-def _operation_payload(
-    operation: PlanSource | PlanDestination | None,
-) -> dict[str, object] | None:
-    if operation is None:
-        return None
-    return {"operation": operation.operation, "params": dict(operation.params)}
-
-
-def _json_default(value: object) -> NoReturn:
-    raise TypeError(f"Unsupported plan value: {type(value).__name__}")

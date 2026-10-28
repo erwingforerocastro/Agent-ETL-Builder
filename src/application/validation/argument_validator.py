@@ -7,7 +7,7 @@ from application.validation.operations import OperationPolicy, iter_operations
 from application.validation.path_validator import PathValueValidator
 from application.validation.types import value_matches_type
 from domain.entities.plan import ExecutionPlan
-from domain.entities.registry import ModuleInput
+from domain.entities.registry import ConstraintKind, ModuleInput
 
 
 class ArgumentValidator:
@@ -99,45 +99,64 @@ class ArgumentValidator:
         value: object,
     ) -> None:
         for constraint in definition.constraints:
-            text = constraint.lower()
-            if (
-                "non-empty when provided" in text
-                and value is not None
-                and isinstance(value, str | list | tuple | dict)
-                and len(value) == 0
-            ):
-                raise self._error_factory.error(
-                    code="PLAN_INVALID_ARGUMENT",
-                    message="Argument must not be empty when provided",
-                    context={
-                        "step": label,
-                        "operation": operation,
-                        "argument": definition.name,
-                    },
-                )
-            if "column name" in text and isinstance(value, str) and not value.strip():
-                raise self._error_factory.error(
-                    code="PLAN_INVALID_ARGUMENT",
-                    message="Column names must not be blank",
-                    context={
-                        "step": label,
-                        "operation": operation,
-                        "argument": definition.name,
-                    },
-                )
-            if (
-                "column names must exist" in text
-                and isinstance(value, list | tuple)
-                and any(not isinstance(item, str) or not item.strip() for item in value)
-            ):
-                raise self._error_factory.error(
-                    code="PLAN_INVALID_ARGUMENT",
-                    message="Column names must be non-blank strings",
-                    context={
-                        "step": label,
-                        "operation": operation,
-                        "argument": definition.name,
-                    },
-                )
-            if "path" in text:
+            if constraint.kind is ConstraintKind.NON_EMPTY:
+                if (
+                    value is not None
+                    and isinstance(value, str | list | tuple | dict)
+                    and len(value) == 0
+                ):
+                    raise self._error_factory.error(
+                        code="PLAN_INVALID_ARGUMENT",
+                        message="Argument must not be empty when provided",
+                        context={
+                            "step": label,
+                            "operation": operation,
+                            "argument": definition.name,
+                        },
+                    )
+            elif constraint.kind is ConstraintKind.COLUMN_NAME:
+                if isinstance(value, str) and not value.strip():
+                    raise self._error_factory.error(
+                        code="PLAN_INVALID_ARGUMENT",
+                        message="Column names must not be blank",
+                        context={
+                            "step": label,
+                            "operation": operation,
+                            "argument": definition.name,
+                        },
+                    )
+            elif constraint.kind in {
+                ConstraintKind.COLUMN_NAMES,
+                ConstraintKind.COLUMN_EXISTS,
+                ConstraintKind.TEXT_COLUMNS,
+            }:
+                if isinstance(value, str):
+                    items: tuple[object, ...] = (value,)
+                elif isinstance(value, list | tuple):
+                    items = tuple(value)
+                else:
+                    items = ()
+                if any(not isinstance(item, str) or not item.strip() for item in items):
+                    raise self._error_factory.error(
+                        code="PLAN_INVALID_ARGUMENT",
+                        message="Column names must be non-blank strings",
+                        context={
+                            "step": label,
+                            "operation": operation,
+                            "argument": definition.name,
+                        },
+                    )
+            elif constraint.kind is ConstraintKind.ENUM:
+                if not isinstance(value, str) or value not in constraint.values:
+                    raise self._error_factory.error(
+                        code="PLAN_INVALID_ARGUMENT",
+                        message="Argument is not one of the allowed values",
+                        context={
+                            "step": label,
+                            "operation": operation,
+                            "argument": definition.name,
+                            "allowed": constraint.values,
+                        },
+                    )
+            elif constraint.kind is ConstraintKind.PATH:
                 self._path_validator.validate(value, label=f"{label}.{definition.name}")

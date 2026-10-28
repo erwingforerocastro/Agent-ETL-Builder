@@ -1,13 +1,12 @@
 """Versioned registry with an explicit callable allowlist."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 
 import pandas as pd
 
-from application.registry.constants import REGISTRY_VERSION
+from application.registry.specs import ModuleSpec
 from domain.entities.registry import ModuleMetadata, RegistrySnapshot
 from domain.errors import RegistryError
-from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.functions import build_snapshot
 
 
@@ -78,15 +77,14 @@ class ModuleRegistry:
         )
 
 
-def build_module_registry() -> ModuleRegistry:
+def build_module_registry(
+    specs: Sequence[ModuleSpec],
+    functions: Mapping[str, Callable[..., pd.DataFrame]],
+) -> ModuleRegistry:
     return ModuleRegistry(
-        snapshot=build_snapshot(),
-        functions=MODULE_FUNCTIONS,
+        snapshot=build_snapshot(specs, functions),
+        functions=functions,
     )
 
 
-__all__ = [
-    "REGISTRY_VERSION",
-    "ModuleRegistry",
-    "build_module_registry",
-]
+__all__ = ["ModuleRegistry", "build_module_registry"]

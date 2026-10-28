@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from application.ports.module_registry import ModuleRegistryPort
+from application.ports.plan_sizer import PlanSizerPort
 from application.ports.workspace import WorkspaceProbePort
 from application.validation.approval_validator import ApprovalValidator
 from application.validation.argument_validator import ArgumentValidator
@@ -21,6 +22,7 @@ def build_default_checks(
     registry: ModuleRegistryPort,
     settings: PlanValidationSettings,
     workspace: WorkspaceProbePort,
+    sizer: PlanSizerPort,
     error_factory: PlanValidationErrorFactory | None = None,
 ) -> tuple[PlanCheck, ...]:
     """Build the standard validation pipeline in execution order."""
@@ -32,7 +34,7 @@ def build_default_checks(
         RegistryEntryValidator(policy, factory),
         ArgumentValidator(policy, path_value_validator, factory),
         PlanPathValidator(policy, path_value_validator),
-        LimitsValidator(settings, factory),
+        LimitsValidator(settings, sizer, factory),
         SecurityValidator(settings, factory),
         ApprovalValidator(policy, factory),
     )

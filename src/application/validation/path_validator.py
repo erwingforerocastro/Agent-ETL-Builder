@@ -16,7 +16,7 @@ from application.validation.errors import PlanValidationErrorFactory
 from application.validation.operations import OperationPolicy, iter_operations
 from application.validation.settings import PlanValidationSettings
 from domain.entities.plan import ExecutionPlan
-from domain.entities.registry import ModuleInput
+from domain.entities.registry import ConstraintKind, ModuleInput
 
 
 class PathValueValidator:
@@ -190,7 +190,7 @@ class PlanPathValidator:
     @staticmethod
     def _is_path_input(name: str, definition: ModuleInput | None) -> bool:
         if definition is not None and any(
-            "path" in constraint.lower() for constraint in definition.constraints
+            constraint.kind is ConstraintKind.PATH for constraint in definition.constraints
         ):
             return True
         return _is_path_key(name)

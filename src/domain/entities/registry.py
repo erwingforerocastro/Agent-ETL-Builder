@@ -2,11 +2,41 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 
 
 def _require_text(value: str, field_name: str) -> None:
     if not value.strip():
         raise ValueError(f"{field_name} must not be blank")
+
+
+class ConstraintKind(Enum):
+    """Kinds of policy attached to a module input."""
+
+    NON_EMPTY = "non_empty"
+    COLUMN_NAME = "column_name"
+    COLUMN_NAMES = "column_names"
+    COLUMN_EXISTS = "column_exists"
+    TEXT_COLUMNS = "text_columns"
+    PATH = "path"
+    ENUM = "enum"
+
+
+@dataclass(frozen=True, slots=True)
+class Constraint:
+    """One typed input constraint."""
+
+    kind: ConstraintKind
+    values: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.kind is ConstraintKind.ENUM:
+            if not self.values:
+                raise ValueError("enum constraints must declare values")
+        elif self.values:
+            raise ValueError("only enum constraints may declare values")
+        if any(not value.strip() for value in self.values):
+            raise ValueError("constraint values must not be blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,7 +45,7 @@ class ModuleInput:
     type: str
     required: bool
     default: str | None = None
-    constraints: tuple[str, ...] = ()
+    constraints: tuple[Constraint, ...] = ()
     pipeline_input: bool = False
 
     def __post_init__(self) -> None:
@@ -23,8 +53,8 @@ class ModuleInput:
         _require_text(self.type, "input type")
         if self.pipeline_input and not self.required:
             raise ValueError("pipeline inputs must be required")
-        if any(not constraint.strip() for constraint in self.constraints):
-            raise ValueError("input constraints must not be blank")
+        if len({constraint.kind for constraint in self.constraints}) != len(self.constraints):
+            raise ValueError("input constraints must be unique")
 
 
 @dataclass(frozen=True, slots=True)

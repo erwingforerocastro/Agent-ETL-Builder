@@ -6,12 +6,13 @@ from typing import Literal
 
 import pandas as pd
 
+from application.registry.vocabulary import COLUMN_CASES
 from domain.errors import TransformationError
 from infrastructure.transformations._common import require_unique_columns
 
 ColumnCase = Literal["lower", "upper", "preserve"]
 
-_CASES = frozenset({"lower", "upper", "preserve"})
+_CASES = frozenset(COLUMN_CASES)
 
 
 def _normalize_name(name: str, case: ColumnCase) -> str:

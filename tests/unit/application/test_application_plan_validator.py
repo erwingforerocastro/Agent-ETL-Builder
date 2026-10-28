@@ -53,6 +53,11 @@ class _StubWorkspace:
         return self._info
 
 
+class _StubPlanSizer:
+    def size_bytes(self, plan: ExecutionPlan) -> int:
+        return 1
+
+
 def _module(*inputs: ModuleInput) -> ModuleMetadata:
     return ModuleMetadata(
         name="test_module",
@@ -62,7 +67,7 @@ def _module(*inputs: ModuleInput) -> ModuleMetadata:
         description="Test module.",
         inputs=tuple(inputs),
         output=ModuleOutput(type="DataFrame", description="DataFrame"),
-        dependencies=("pandas",),
+        dependencies=("dataframe",),
         side_effects=(),
         examples=(),
         supports_chunking=False,
@@ -93,6 +98,7 @@ def test_application_validator_uses_injected_workspace_probe() -> None:
     validator = PlanValidator(
         _StubRegistry(module),
         workspace=_StubWorkspace(WorkspacePathInfo(resolved="input.csv")),
+        sizer=_StubPlanSizer(),
     )
 
     validator.validate(_plan())
@@ -108,6 +114,7 @@ def test_application_validator_rejects_path_outside_workspace() -> None:
                 error=WorkspacePathError.OUTSIDE_WORKSPACE,
             )
         ),
+        sizer=_StubPlanSizer(),
     )
     plan = _plan(source=PlanSource(operation="test_module", params={"path": "outside.csv"}))
 

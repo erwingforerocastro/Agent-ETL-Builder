@@ -1,9 +1,11 @@
+from typing import cast
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 
 from domain.errors import TransformationError
-from infrastructure.transformations.drop_duplicates import drop_duplicate_rows
+from infrastructure.transformations.drop_duplicates import KeepPolicy, drop_duplicate_rows
 
 
 def test_drop_duplicate_rows_keeps_first_and_resets_index() -> None:
@@ -56,3 +58,13 @@ def test_drop_duplicate_rows_rejects_empty_subset() -> None:
 
     assert caught.value.code == "TRANSFORMATION_INVALID_PARAMETER"
     assert caught.value.context == {"parameter": "subset"}
+
+
+def test_drop_duplicate_rows_rejects_invalid_keep_policy() -> None:
+    df = pd.DataFrame({"id": [1, 2]})
+
+    with pytest.raises(TransformationError) as caught:
+        drop_duplicate_rows(df, keep=cast(KeepPolicy, "middle"))
+
+    assert caught.value.code == "TRANSFORMATION_INVALID_PARAMETER"
+    assert caught.value.context == {"parameter": "keep"}

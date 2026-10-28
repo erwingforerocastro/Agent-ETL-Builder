@@ -4,6 +4,7 @@ from typing import Literal
 
 import pandas as pd
 
+from application.registry.vocabulary import CAST_ERROR_MODES, CAST_TARGET_TYPES
 from domain.errors import TransformationError
 from infrastructure.transformations._common import (
     require_columns,
@@ -13,8 +14,8 @@ from infrastructure.transformations._common import (
 TargetType = Literal["string", "integer", "float"]
 CastMode = Literal["raise", "coerce"]
 
-_TARGET_TYPES = frozenset({"string", "integer", "float"})
-_CAST_MODES = frozenset({"raise", "coerce"})
+_TARGET_TYPES = frozenset(CAST_TARGET_TYPES)
+_CAST_MODES = frozenset(CAST_ERROR_MODES)
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 

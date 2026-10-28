@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from application.validation.constants import (
     ON_ERROR_POLICIES,
     OPERATION_PATTERN,
-    PLAN_MODES,
     STEP_ID_PATTERN,
     SUPPORTED_PLAN_VERSIONS,
 )
@@ -23,7 +22,10 @@ from domain.entities.plan import (
 
 
 class SchemaValidator:
-    """Validates the shape of a plan and the syntax of its operations."""
+    """Validates external syntax and type guards.
+
+    The domain entity owns mode and step-id uniqueness.
+    """
 
     def __init__(self, error_factory: PlanValidationErrorFactory | None = None) -> None:
         self._error_factory = error_factory or PlanValidationErrorFactory()
@@ -38,12 +40,6 @@ class SchemaValidator:
                 code="PLAN_INVALID_SCHEMA",
                 message="plan_version must be 1.0",
                 context={"plan_version": plan.plan_version},
-            )
-        if plan.mode not in PLAN_MODES:
-            raise self._error_factory.error(
-                code="PLAN_INVALID_SCHEMA",
-                message="mode must be pipeline or assessment",
-                context={"mode": plan.mode},
             )
         if plan.on_error not in ON_ERROR_POLICIES:
             raise self._error_factory.error(
@@ -66,21 +62,6 @@ class SchemaValidator:
                 code="PLAN_INVALID_SCHEMA",
                 message="chunking.enabled must be a boolean",
             )
-        if plan.mode == "assessment" and plan.destination is not None:
-            raise self._error_factory.error(
-                code="PLAN_INVALID_SCHEMA",
-                message="Assessment plans must not have a destination",
-            )
-        if plan.mode == "pipeline" and plan.source is None:
-            raise self._error_factory.error(
-                code="PLAN_INVALID_SCHEMA",
-                message="Pipeline plans must have a source",
-            )
-        if plan.mode == "pipeline" and plan.destination is None:
-            raise self._error_factory.error(
-                code="PLAN_INVALID_SCHEMA",
-                message="Pipeline plans must have a destination",
-            )
         if plan.source is not None and not isinstance(plan.source, PlanSource):
             raise self._error_factory.error(
                 code="PLAN_INVALID_SCHEMA",
@@ -92,7 +73,6 @@ class SchemaValidator:
                 message="destination must be a PlanDestination value",
             )
 
-        step_ids: list[str] = []
         for step in plan.transformations:
             if not isinstance(step, PlanTransformation):
                 raise self._error_factory.error(
@@ -105,12 +85,6 @@ class SchemaValidator:
                     message="step_id contains unsupported characters",
                     context={"step_id": step.step_id},
                 )
-            step_ids.append(step.step_id)
-        if len(step_ids) != len(set(step_ids)):
-            raise self._error_factory.error(
-                code="PLAN_DUPLICATE_STEP_ID",
-                message="step_id values must be unique",
-            )
 
     def _validate_operations(self, plan: ExecutionPlan) -> None:
         for call in iter_operations(plan):

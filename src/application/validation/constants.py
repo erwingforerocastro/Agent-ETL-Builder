@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 
 SUPPORTED_PLAN_VERSIONS = frozenset({"1.0"})
-PLAN_MODES = frozenset({"pipeline", "assessment"})
 ON_ERROR_POLICIES = frozenset({"fail_fast", "continue"})
 
 SCHEMA_MAX_PARAM_DEPTH = 10

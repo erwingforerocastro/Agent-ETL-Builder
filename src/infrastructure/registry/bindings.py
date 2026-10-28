@@ -14,6 +14,9 @@ from infrastructure.transformations.standardize_column_names import (
 )
 from infrastructure.transformations.trim_whitespace import trim_whitespace
 
+ALLOWED_MODULE_PREFIX = "infrastructure."
+CAPABILITY_PACKAGES: Mapping[str, str] = {"dataframe": "pandas"}
+
 MODULE_FUNCTIONS: Mapping[str, Callable[..., pd.DataFrame]] = {
     "drop_duplicate_rows": drop_duplicate_rows,
     "drop_empty_rows": drop_empty_rows,
@@ -25,4 +28,4 @@ MODULE_FUNCTIONS: Mapping[str, Callable[..., pd.DataFrame]] = {
 }
 
 
-__all__ = ["MODULE_FUNCTIONS"]
+__all__ = ["ALLOWED_MODULE_PREFIX", "CAPABILITY_PACKAGES", "MODULE_FUNCTIONS"]

@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from domain.errors import TransformationError
+from domain.errors import LoadError
 
 
 def save_csv(df: pd.DataFrame, *, path: str = "output.csv") -> pd.DataFrame:
@@ -10,8 +10,9 @@ def save_csv(df: pd.DataFrame, *, path: str = "output.csv") -> pd.DataFrame:
         df.to_csv(path, index=False)
         return df.copy()
     except Exception as exc:
-        raise TransformationError(
+        raise LoadError(
             code="LOAD_FAILED",
-            message=str(exc),
+            message="CSV load failed",
             module=__name__,
+            context={"path": path},
         ) from exc

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from application.ports.module_registry import ModuleRegistryPort
+from application.ports.plan_sizer import PlanSizerPort
 from application.ports.plan_validator import PlanValidatorPort
 from application.ports.workspace import WorkspaceProbePort
 from application.validation.errors import PlanValidationError, PlanValidationErrorFactory
@@ -22,6 +23,7 @@ class PlanValidator(PlanValidatorPort):
         registry: ModuleRegistryPort,
         *,
         workspace: WorkspaceProbePort,
+        sizer: PlanSizerPort | None = None,
         max_steps: int = 100,
         max_chunk_size: int = 10_000_000,
         max_plan_bytes: int = 1_000_000,
@@ -40,11 +42,18 @@ class PlanValidator(PlanValidatorPort):
             max_param_depth=max_param_depth,
             max_string_length=max_string_length,
         )
-        self._checks = (
-            tuple(checks)
-            if checks is not None
-            else build_default_checks(registry, settings, workspace, self._error_factory)
-        )
+        if checks is not None:
+            self._checks = tuple(checks)
+        else:
+            if sizer is None:
+                raise TypeError("sizer is required when checks are not provided")
+            self._checks = build_default_checks(
+                registry,
+                settings,
+                workspace,
+                sizer,
+                self._error_factory,
+            )
 
     def validate(self, plan: ExecutionPlan) -> None:
         """Validate an already parsed domain plan."""

@@ -5,6 +5,7 @@ from typing import Literal
 
 import pandas as pd
 
+from application.registry.vocabulary import WHITESPACE_POLICIES
 from domain.errors import TransformationError
 from infrastructure.transformations._common import (
     is_text_column,
@@ -15,7 +16,7 @@ from infrastructure.transformations._common import (
 
 TrimPolicy = Literal["both", "leading", "trailing"]
 
-_POLICIES = frozenset({"both", "leading", "trailing"})
+_POLICIES = frozenset(WHITESPACE_POLICIES)
 
 
 def _trim_text_series(series: pd.Series, policy: TrimPolicy) -> pd.Series:

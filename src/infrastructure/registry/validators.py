@@ -10,42 +10,23 @@ from typing import Literal, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
-from application.registry.constants import ALLOWED_MODULE_PREFIX, OUTPUT_DESCRIPTION
+from application.registry.constants import OUTPUT_DESCRIPTION
+from application.registry.metadata import ExampleValidator, RegistryErrorFactory, TypeValidator
 from application.registry.specs import ModuleSpec
-from application.validation.types import value_matches_type
 from domain.entities.registry import (
     ModuleInput,
     ModuleMetadata,
     ModuleOutput,
     RegistrySnapshot,
 )
-from domain.errors import RegistryError
-
-
-class RegistryValidator:
-    """Validates module specifications and signatures."""
-
-    def create_error(
-        self,
-        *,
-        code: str,
-        message: str,
-        context: Mapping[str, object] | None = None,
-        module_name: str | None = None,
-    ) -> RegistryError:
-        return RegistryError(
-            code=code,
-            message=message,
-            module=module_name or __name__,
-            context=context,
-        )
+from infrastructure.registry.bindings import ALLOWED_MODULE_PREFIX, CAPABILITY_PACKAGES
 
 
 class SignatureValidator:
     """Validates function signatures and annotations."""
 
-    def __init__(self, error_factory: RegistryValidator | None = None) -> None:
-        self._error_factory = error_factory or RegistryValidator()
+    def __init__(self, error_factory: RegistryErrorFactory | None = None) -> None:
+        self._error_factory = error_factory or RegistryErrorFactory()
 
     def annotation_to_text(self, annotation: object, *, module_name: str, input_name: str) -> str:
         if annotation is pd.DataFrame:
@@ -103,132 +84,21 @@ class SignatureValidator:
         return repr(value)
 
 
-class TypeValidator:
-    """Validates values against declared types."""
-
-    def __init__(self, error_factory: RegistryValidator | None = None) -> None:
-        self._error_factory = error_factory or RegistryValidator()
-
-    def value_matches_type(self, value: object, declared: str) -> bool:
-        return value_matches_type(value, declared)
-
-    def validate_example_value(
-        self,
-        *,
-        value: object,
-        input_definition: ModuleInput,
-        module_name: str,
-        example_index: int,
-    ) -> None:
-        if not self.value_matches_type(value, input_definition.type):
-            raise self._error_factory.create_error(
-                code="REGISTRY_INVALID_EXAMPLE",
-                message="Example value does not match the declared input type",
-                context={
-                    "module": module_name,
-                    "input": input_definition.name,
-                    "example_index": example_index,
-                },
-                module_name=module_name,
-            )
-
-    def validate_default(
-        self,
-        *,
-        value: object,
-        input_definition: ModuleInput,
-        module_name: str,
-    ) -> None:
-        if not self.value_matches_type(value, input_definition.type):
-            raise self._error_factory.create_error(
-                code="REGISTRY_INVALID_DEFAULT",
-                message="Module default does not match the declared input type",
-                context={"module": module_name, "input": input_definition.name},
-                module_name=module_name,
-            )
-
-
 class DependencyValidator:
     """Validates module dependencies."""
 
-    def __init__(self, error_factory: RegistryValidator | None = None) -> None:
-        self._error_factory = error_factory or RegistryValidator()
+    def __init__(self, error_factory: RegistryErrorFactory | None = None) -> None:
+        self._error_factory = error_factory or RegistryErrorFactory()
 
     def validate_dependencies(self, spec: ModuleSpec) -> None:
         for dependency in spec.dependencies:
-            if find_spec(dependency) is None:
+            package = CAPABILITY_PACKAGES.get(dependency, dependency)
+            if find_spec(package) is None:
                 raise self._error_factory.create_error(
                     code="REGISTRY_MISSING_DEPENDENCY",
                     message="A declared module dependency is unavailable",
                     context={"module": spec.name, "dependency": dependency},
                     module_name=spec.name,
-                )
-
-
-class ExampleValidator:
-    """Validates module examples."""
-
-    def __init__(
-        self,
-        type_validator: TypeValidator | None = None,
-        error_factory: RegistryValidator | None = None,
-    ) -> None:
-        self._type_validator = type_validator or TypeValidator()
-        self._error_factory = error_factory or RegistryValidator()
-
-    def validate_examples(
-        self,
-        *,
-        spec: ModuleSpec,
-        inputs: tuple[ModuleInput, ...],
-    ) -> None:
-        by_name = {item.name: item for item in inputs}
-        caller_inputs = {item.name for item in inputs if not item.pipeline_input}
-        required = {item.name for item in inputs if item.required and not item.pipeline_input}
-
-        for index, example in enumerate(spec.examples):
-            unknown = sorted(set(example) - set(by_name))
-            if unknown:
-                raise self._error_factory.create_error(
-                    code="REGISTRY_INVALID_EXAMPLE",
-                    message="Example contains unknown inputs",
-                    context={
-                        "module": spec.name,
-                        "example_index": index,
-                        "inputs": unknown,
-                    },
-                    module_name=spec.name,
-                )
-            pipeline = sorted(set(example) & (set(by_name) - caller_inputs))
-            if pipeline:
-                raise self._error_factory.create_error(
-                    code="REGISTRY_INVALID_EXAMPLE",
-                    message="Examples must not supply pipeline-managed inputs",
-                    context={
-                        "module": spec.name,
-                        "example_index": index,
-                        "inputs": pipeline,
-                    },
-                    module_name=spec.name,
-                )
-            missing = sorted(required - set(example))
-            if missing:
-                raise self._error_factory.create_error(
-                    code="REGISTRY_INVALID_EXAMPLE",
-                    message="Example is missing required inputs",
-                    context={
-                        "module": spec.name,
-                        "example_index": index,
-                        "inputs": missing,
-                    },
-                    module_name=spec.name,
-                )
-            for name, value in example.items():
-                self._type_validator.validate_example_value(
-                    value=value,
-                    input_definition=by_name[name],
-                    module_name=spec.name,
-                    example_index=index,
                 )
 
 
@@ -241,13 +111,13 @@ class ModuleMetadataBuilder:
         type_validator: TypeValidator | None = None,
         dependency_validator: DependencyValidator | None = None,
         example_validator: ExampleValidator | None = None,
-        error_factory: RegistryValidator | None = None,
+        error_factory: RegistryErrorFactory | None = None,
     ) -> None:
         self._signature_validator = signature_validator or SignatureValidator()
         self._type_validator = type_validator or TypeValidator()
         self._dependency_validator = dependency_validator or DependencyValidator()
         self._example_validator = example_validator or ExampleValidator()
-        self._error_factory = error_factory or RegistryValidator()
+        self._error_factory = error_factory or RegistryErrorFactory()
 
     def metadata_for(
         self,
@@ -383,7 +253,7 @@ class RegistrySnapshotBuilder:
         registry_version: str = "1.0.0",
     ) -> RegistrySnapshot:
         names = [spec.name for spec in specs]
-        error_factory = RegistryValidator()
+        error_factory = RegistryErrorFactory()
         if len(names) != len(set(names)):
             duplicates = sorted({name for name in names if names.count(name) > 1})
             raise error_factory.create_error(
@@ -414,81 +284,3 @@ class RegistrySnapshotBuilder:
             self._metadata_builder.metadata_for(spec, functions[spec.name]) for spec in specs
         )
         return RegistrySnapshot(version=registry_version, modules=modules)
-
-
-# Backward compatible function aliases
-def _registry_error(
-    *,
-    code: str,
-    message: str,
-    context: Mapping[str, object] | None = None,
-) -> RegistryError:
-    factory = RegistryValidator()
-    return factory.create_error(code=code, message=message, context=context)
-
-
-def _annotation_to_text(annotation: object, *, module_name: str, input_name: str) -> str:
-    validator = SignatureValidator()
-    return validator.annotation_to_text(annotation, module_name=module_name, input_name=input_name)
-
-
-def _format_default(value: object) -> str:
-    validator = SignatureValidator()
-    return validator.format_default(value)
-
-
-def _validate_example_value(
-    *,
-    value: object,
-    input_definition: ModuleInput,
-    module_name: str,
-    example_index: int,
-) -> None:
-    validator = TypeValidator()
-    validator.validate_example_value(
-        value=value,
-        input_definition=input_definition,
-        module_name=module_name,
-        example_index=example_index,
-    )
-
-
-def _value_matches_type(value: object, declared: str) -> bool:
-    validator = TypeValidator()
-    return validator.value_matches_type(value, declared)
-
-
-def _validate_default(
-    *,
-    value: object,
-    input_definition: ModuleInput,
-    module_name: str,
-) -> None:
-    validator = TypeValidator()
-    validator.validate_default(
-        value=value,
-        input_definition=input_definition,
-        module_name=module_name,
-    )
-
-
-def _validate_dependencies(spec: ModuleSpec) -> None:
-    validator = DependencyValidator()
-    validator.validate_dependencies(spec)
-
-
-def _validate_examples(
-    *,
-    spec: ModuleSpec,
-    inputs: tuple[ModuleInput, ...],
-) -> None:
-    validator = ExampleValidator()
-    validator.validate_examples(spec=spec, inputs=tuple(inputs))
-
-
-def _metadata_for(
-    spec: ModuleSpec,
-    function: Callable[..., pd.DataFrame],
-) -> ModuleMetadata:
-    builder = ModuleMetadataBuilder()
-    return builder.metadata_for(spec, function)

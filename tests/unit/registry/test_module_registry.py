@@ -8,11 +8,16 @@ import pytest
 from pandas.testing import assert_frame_equal
 
 from application.ports.module_registry import ModuleRegistryPort
+from application.registry.specs import MODULE_SPECS, ModuleSpec
 from domain.errors import RegistryError
 from infrastructure.registry.bindings import MODULE_FUNCTIONS
-from infrastructure.registry.catalog import MODULE_SPECS, ModuleSpec, build_snapshot
-from infrastructure.registry.module_registry import build_module_registry
+from infrastructure.registry.functions import build_snapshot
+from infrastructure.registry.module_registry import ModuleRegistry, build_module_registry
 from infrastructure.transformations.trim_whitespace import trim_whitespace
+
+
+def _registry() -> ModuleRegistry:
+    return build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
 
 
 def _functions_for(*specs: ModuleSpec) -> dict[str, Callable[..., pd.DataFrame]]:
@@ -28,7 +33,7 @@ def _outside_path(*, value: str = "ok") -> pd.DataFrame:
 
 
 def test_registry_is_versioned_and_contains_the_approved_modules() -> None:
-    snapshot = build_module_registry().snapshot()
+    snapshot = _registry().snapshot()
 
     assert snapshot.version == "1.0.0"
     assert [module.name for module in snapshot.modules] == [
@@ -44,7 +49,7 @@ def test_registry_is_versioned_and_contains_the_approved_modules() -> None:
 
 
 def test_registry_metadata_matches_callable_signatures() -> None:
-    snapshot = build_module_registry().snapshot()
+    snapshot = _registry().snapshot()
 
     for module in snapshot.modules:
         spec = next(item for item in MODULE_SPECS if item.name == module.name)
@@ -78,7 +83,7 @@ def test_registry_metadata_matches_callable_signatures() -> None:
 
 
 def test_registry_examples_only_use_caller_inputs() -> None:
-    snapshot = build_module_registry().snapshot()
+    snapshot = _registry().snapshot()
 
     for module in snapshot.modules:
         caller_inputs = {item.name for item in module.inputs if not item.pipeline_input}
@@ -91,14 +96,14 @@ def test_registry_examples_only_use_caller_inputs() -> None:
 
 
 def test_registry_satisfies_the_application_port() -> None:
-    registry: ModuleRegistryPort = build_module_registry()
+    registry: ModuleRegistryPort = _registry()
 
     assert registry.require("trim_whitespace").version == "1.0.0"
     registry.ensure_version("1.0.0")
 
 
 def test_registry_resolves_only_allowlisted_callables() -> None:
-    registry = build_module_registry()
+    registry = _registry()
     function = registry.function_for("trim_whitespace")
     df = pd.DataFrame({"name": [" Ada "]})
 
@@ -109,7 +114,7 @@ def test_registry_resolves_only_allowlisted_callables() -> None:
 
 
 def test_registry_returns_none_for_unknown_modules() -> None:
-    registry = build_module_registry()
+    registry = _registry()
 
     assert registry.get("missing") is None
 
@@ -121,7 +126,7 @@ def test_registry_returns_none_for_unknown_modules() -> None:
 
 
 def test_registry_rejects_version_mismatches() -> None:
-    registry = build_module_registry()
+    registry = _registry()
 
     with pytest.raises(RegistryError) as module:
         registry.get("trim_whitespace", version="0.9.0")
@@ -143,7 +148,7 @@ def test_registry_builder_rejects_duplicate_modules() -> None:
 
 
 def test_registry_builder_rejects_unknown_constraints() -> None:
-    spec = replace(MODULE_SPECS[0], constraints={"missing": ("constraint",)})
+    spec = replace(MODULE_SPECS[0], constraints={"missing": ()})
 
     with pytest.raises(RegistryError) as caught:
         build_snapshot((spec,), _functions_for(spec))

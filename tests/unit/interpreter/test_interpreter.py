@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from application.registry.specs import MODULE_SPECS
+from application.use_cases.execute_plan import ExecutePlanUseCase
 from domain.entities.plan import (
     ExecutionPlan,
     PlanChunking,
@@ -9,13 +11,14 @@ from domain.entities.plan import (
     PlanSource,
     PlanTransformation,
 )
-from infrastructure.interpreter.interpreter import PlanInterpreter
+from infrastructure.interpreter.step_runner import SandboxStepRunner
+from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.module_registry import build_module_registry
 
 
 def test_interpreter_executes_valid_plan(tmp_path: Path) -> None:
-    registry = build_module_registry()
-    interpreter = PlanInterpreter(registry)
+    registry = build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
+    use_case = ExecutePlanUseCase(SandboxStepRunner(registry))
     input_file = tmp_path / "input.csv"
     input_file.write_text("name\n Ada \nBob\n", encoding="utf-8")
     output_file = tmp_path / "output.csv"
@@ -38,6 +41,6 @@ def test_interpreter_executes_valid_plan(tmp_path: Path) -> None:
         on_error="fail_fast",
         approval_required=False,
     )
-    result = interpreter.execute(plan)
-    assert result["status"] == "success"
+    result = use_case.execute(plan)
+    assert result.status == "success"
     assert output_file.exists()

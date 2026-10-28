@@ -43,6 +43,14 @@ class TransformationError(EtlError):
     """A deterministic data transformation failed."""
 
 
+class IngestionError(EtlError):
+    """A source could not be read."""
+
+
+class LoadError(EtlError):
+    """A destination could not be written."""
+
+
 class RegistryError(EtlError):
     """The module registry is invalid or a lookup failed."""
 

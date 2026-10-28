@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from infrastructure.validation.errors import PlanValidationError
+from domain.errors import PlanValidationError
 from infrastructure.validation.plan_schema import (
     ExecutionPlanSchema,
     PlanSchema,
