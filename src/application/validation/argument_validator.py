@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from application.validation.errors import PlanValidationErrorFactory
+from application.validation.operations import OperationPolicy, iter_operations
+from application.validation.path_validator import PathValueValidator
+from application.validation.types import value_matches_type
 from domain.entities.plan import ExecutionPlan
 from domain.entities.registry import ModuleInput
-from infrastructure.registry.validators import TypeValidator
-from infrastructure.validation.errors import PlanValidationErrorFactory
-from infrastructure.validation.operations import OperationPolicy, iter_operations
-from infrastructure.validation.path_validator import PathValueValidator
 
 
 class ArgumentValidator:
@@ -18,12 +18,10 @@ class ArgumentValidator:
         policy: OperationPolicy,
         path_validator: PathValueValidator,
         error_factory: PlanValidationErrorFactory | None = None,
-        type_validator: TypeValidator | None = None,
     ) -> None:
         self._policy = policy
         self._path_validator = path_validator
         self._error_factory = error_factory or PlanValidationErrorFactory()
-        self._type_validator = type_validator or TypeValidator()
 
     def validate(self, plan: ExecutionPlan) -> None:
         for call in iter_operations(plan):
@@ -74,7 +72,7 @@ class ArgumentValidator:
 
             for name, value in call.params.items():
                 definition = caller_inputs[name]
-                if not self._type_validator.value_matches_type(value, definition.type):
+                if not value_matches_type(value, definition.type):
                     raise self._error_factory.error(
                         code="PLAN_INVALID_ARGUMENT_TYPE",
                         message="Argument value does not match the declared type",

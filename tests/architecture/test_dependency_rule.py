@@ -18,6 +18,7 @@ FRAMEWORK_MODULES = frozenset(
         "fastapi",
         "langgraph",
         "pandas",
+        "pydantic",
         "postgresql",
         "psycopg",
         "psycopg2",
@@ -77,3 +78,54 @@ def test_core_layers_do_not_import_frameworks() -> None:
                 violations.append(f"{path.relative_to(PACKAGE_ROOT)} imports {imported}")
 
     assert not violations, "Framework imports in core layers:\n" + "\n".join(sorted(violations))
+
+
+def _module_name(path: Path) -> str:
+    relative = path.relative_to(PACKAGE_ROOT).with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _internal_imports(path: Path, modules: set[str]) -> set[str]:
+    return {imported for imported in _imported_modules(path) if imported in modules}
+
+
+def _find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
+    visited: set[str] = set()
+    stack: list[str] = []
+    on_stack: set[str] = set()
+
+    def visit(node: str) -> list[str] | None:
+        if node in on_stack:
+            start = stack.index(node)
+            return [*stack[start:], node]
+        if node in visited:
+            return None
+
+        visited.add(node)
+        stack.append(node)
+        on_stack.add(node)
+        for dependency in sorted(graph[node]):
+            cycle = visit(dependency)
+            if cycle is not None:
+                return cycle
+        stack.pop()
+        on_stack.remove(node)
+        return None
+
+    for node in sorted(graph):
+        cycle = visit(node)
+        if cycle is not None:
+            return cycle
+    return None
+
+
+def test_internal_import_graph_is_acyclic() -> None:
+    paths = {_module_name(path): path for path in PACKAGE_ROOT.rglob("*.py")}
+    graph = {module: _internal_imports(path, set(paths)) for module, path in paths.items()}
+
+    cycle = _find_cycle(graph)
+
+    assert cycle is None, "Import cycle: " + " -> ".join(cycle or [])

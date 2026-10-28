@@ -6,14 +6,14 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
 from application.ports.module_registry import ModuleRegistryPort
-from domain.entities.plan import ExecutionPlan
-from domain.entities.registry import ModuleMetadata
-from infrastructure.validation.constants import (
+from application.validation.constants import (
     DESTRUCTIVE_OPERATIONS,
     WRITE_OPERATION_TOKENS,
     WRITE_SIDE_EFFECT_TOKENS,
 )
-from infrastructure.validation.errors import PlanValidationErrorFactory
+from application.validation.errors import PlanValidationErrorFactory
+from domain.entities.plan import ExecutionPlan
+from domain.entities.registry import ModuleMetadata
 
 
 @dataclass(frozen=True, slots=True)

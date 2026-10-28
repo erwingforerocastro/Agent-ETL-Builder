@@ -1,4 +1,5 @@
 import inspect
+from collections.abc import Callable
 from dataclasses import replace
 from typing import cast
 
@@ -8,9 +9,14 @@ from pandas.testing import assert_frame_equal
 
 from application.ports.module_registry import ModuleRegistryPort
 from domain.errors import RegistryError
+from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.catalog import MODULE_SPECS, ModuleSpec, build_snapshot
 from infrastructure.registry.module_registry import build_module_registry
 from infrastructure.transformations.trim_whitespace import trim_whitespace
+
+
+def _functions_for(*specs: ModuleSpec) -> dict[str, Callable[..., pd.DataFrame]]:
+    return {spec.name: MODULE_FUNCTIONS[spec.name] for spec in specs}
 
 
 def _invalid_default(*, value: str = cast(str, 123)) -> pd.DataFrame:
@@ -42,11 +48,12 @@ def test_registry_metadata_matches_callable_signatures() -> None:
 
     for module in snapshot.modules:
         spec = next(item for item in MODULE_SPECS if item.name == module.name)
-        signature = inspect.signature(spec.function)
+        function = MODULE_FUNCTIONS[spec.name]
+        signature = inspect.signature(function)
 
         assert tuple(item.name for item in module.inputs) == tuple(signature.parameters)
-        assert module.module == spec.function.__module__
-        assert module.function == spec.function.__name__
+        assert module.module == function.__module__
+        assert module.function == function.__name__
         assert module.output.type == "DataFrame"
         if module.name != "save_csv":
             assert module.idempotent
@@ -130,7 +137,7 @@ def test_registry_builder_rejects_duplicate_modules() -> None:
     spec = MODULE_SPECS[0]
 
     with pytest.raises(RegistryError) as caught:
-        build_snapshot((spec, spec))
+        build_snapshot((spec, spec), _functions_for(spec))
 
     assert caught.value.code == "REGISTRY_DUPLICATE_MODULE"
 
@@ -139,7 +146,7 @@ def test_registry_builder_rejects_unknown_constraints() -> None:
     spec = replace(MODULE_SPECS[0], constraints={"missing": ("constraint",)})
 
     with pytest.raises(RegistryError) as caught:
-        build_snapshot((spec,))
+        build_snapshot((spec,), _functions_for(spec))
 
     assert caught.value.code == "REGISTRY_INVALID_CONSTRAINT"
     assert caught.value.context == {"module": spec.name, "inputs": ["missing"]}
@@ -149,7 +156,10 @@ def test_registry_builder_rejects_name_drift() -> None:
     spec = replace(MODULE_SPECS[0], name="renamed_module")
 
     with pytest.raises(RegistryError) as caught:
-        build_snapshot((spec,))
+        build_snapshot(
+            (spec,),
+            {"renamed_module": MODULE_FUNCTIONS["drop_duplicate_rows"]},
+        )
 
     assert caught.value.code == "REGISTRY_SIGNATURE_MISMATCH"
 
@@ -159,7 +169,7 @@ def test_registry_builder_rejects_missing_required_example_inputs() -> None:
     spec = replace(spec, examples=({},))
 
     with pytest.raises(RegistryError) as caught:
-        build_snapshot((spec,))
+        build_snapshot((spec,), _functions_for(spec))
 
     assert caught.value.code == "REGISTRY_INVALID_EXAMPLE"
     assert caught.value.context == {
@@ -172,10 +182,13 @@ def test_registry_builder_rejects_missing_required_example_inputs() -> None:
 def test_registry_builder_rejects_wrong_example_types_and_enums() -> None:
     spec = next(item for item in MODULE_SPECS if item.name == "cast_column")
 
+    wrong_type_spec = replace(spec, examples=({"column": 1, "target_type": "integer"},))
+    wrong_enum_spec = replace(spec, examples=({"column": "a", "target_type": "date"},))
+
     with pytest.raises(RegistryError) as wrong_type:
-        build_snapshot((replace(spec, examples=({"column": 1, "target_type": "integer"},)),))
+        build_snapshot((wrong_type_spec,), _functions_for(wrong_type_spec))
     with pytest.raises(RegistryError) as wrong_enum:
-        build_snapshot((replace(spec, examples=({"column": "a", "target_type": "date"},)),))
+        build_snapshot((wrong_enum_spec,), _functions_for(wrong_enum_spec))
 
     assert wrong_type.value.code == "REGISTRY_INVALID_EXAMPLE"
     assert wrong_enum.value.code == "REGISTRY_INVALID_EXAMPLE"
@@ -189,7 +202,7 @@ def test_registry_builder_rejects_pipeline_inputs_in_examples() -> None:
     )
 
     with pytest.raises(RegistryError) as caught:
-        build_snapshot((spec,))
+        build_snapshot((spec,), _functions_for(spec))
 
     assert caught.value.code == "REGISTRY_INVALID_EXAMPLE"
     assert caught.value.context["inputs"] == ["df"]
@@ -202,7 +215,7 @@ def test_registry_builder_rejects_missing_dependencies() -> None:
     )
 
     with pytest.raises(RegistryError) as caught:
-        build_snapshot((spec,))
+        build_snapshot((spec,), _functions_for(spec))
 
     assert caught.value.code == "REGISTRY_MISSING_DEPENDENCY"
     assert caught.value.context == {
@@ -216,7 +229,6 @@ def test_registry_builder_rejects_invalid_defaults() -> None:
     spec = ModuleSpec(
         name="_invalid_default",
         version="1.0.0",
-        function=_invalid_default,
         description="Fake module.",
         constraints={},
         examples=(),
@@ -226,10 +238,32 @@ def test_registry_builder_rejects_invalid_defaults() -> None:
     )
 
     with pytest.raises(RegistryError) as caught:
-        build_snapshot((spec,))
+        build_snapshot((spec,), {"_invalid_default": _invalid_default})
 
     assert caught.value.code == "REGISTRY_INVALID_DEFAULT"
     assert caught.value.context == {"module": "_invalid_default", "input": "value"}
+
+
+def test_registry_builder_requires_a_callable_for_every_spec() -> None:
+    spec = MODULE_SPECS[0]
+
+    with pytest.raises(RegistryError) as caught:
+        build_snapshot((spec,), {})
+
+    assert caught.value.code == "REGISTRY_MISSING_FUNCTION"
+    assert caught.value.context == {"modules": [spec.name]}
+
+
+def test_registry_builder_rejects_unbound_callables() -> None:
+    spec = MODULE_SPECS[0]
+
+    with pytest.raises(RegistryError) as caught:
+        build_snapshot((spec,), MODULE_FUNCTIONS)
+
+    assert caught.value.code == "REGISTRY_UNKNOWN_FUNCTION"
+    assert caught.value.context == {
+        "modules": sorted(set(MODULE_FUNCTIONS) - {spec.name}),
+    }
 
 
 def test_registry_builder_rejects_unapproved_module_paths() -> None:
@@ -237,7 +271,6 @@ def test_registry_builder_rejects_unapproved_module_paths() -> None:
     spec = ModuleSpec(
         name="_outside_path",
         version="1.0.0",
-        function=_outside_path,
         description="Fake module.",
         constraints={},
         examples=(),
@@ -247,7 +280,7 @@ def test_registry_builder_rejects_unapproved_module_paths() -> None:
     )
 
     with pytest.raises(RegistryError) as caught:
-        build_snapshot((spec,))
+        build_snapshot((spec,), {"_outside_path": _outside_path})
 
     assert caught.value.code == "REGISTRY_INVALID_MODULE_PATH"
     assert caught.value.context == {"module": "_outside_path", "path": "os.path"}

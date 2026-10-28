@@ -14,6 +14,8 @@ LangGraph, FastAPI, pandas, PostgreSQL drivers, or other infrastructure.
 |---|---|
 | domain/entities | Plans, registry entries, runs, artifacts, approvals, errors |
 | application/use_cases | Assess sources, build/validate/execute plans, profile, merge, load, report, cancel |
+| application/validation | Plan validation policy: schema, registry, arguments, paths, limits, security, approval |
+| application/registry | Allowlist specs, versions, constraints, examples, and side-effect policy |
 | infrastructure/adapters | PostgreSQL, files, LLM providers, local-memory checkpointer, sandbox, logs |
 | interfaces/API | FastAPI routes and request/response schemas |
 
@@ -23,9 +25,14 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 ## Components and modules
 
 - Module registry: approved functions, versions, inputs, outputs, side effects, and examples.
+  The allowlist policy lives in `application/registry`; concrete callables are bound in
+  `infrastructure/registry/bindings.py`.
 - Plan builder/validator: schema, allowlist, arguments, paths, limits, security, approval.
+  Policy checks live in `application/validation`; Pydantic parsing and filesystem probing
+  are infrastructure adapters.
 - Source assessor: read-only source validation, sampling, profiling, and draft-plan inputs.
-- Interpreter: executes validated steps by calling registry functions.
+- Interpreter: an application use case orchestrates validated steps through a step-runner
+  port; pandas and sandbox mechanics live in infrastructure.
 - Ingestion adapters: CSV, JSON/JSONL, Parquet, and PostgreSQL.
 - Profiling and chunk merger: quality/info metrics with mergeable per-chunk state.
 - Transformation DSL: cleansing, casting, standardization, filtering, and imputation.
@@ -62,9 +69,9 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 ## Project layout
 
 - `src/domain/` entities and contracts.
-- `src/application/` use cases and ports.
-- `src/infrastructure/` PostgreSQL, file, LLM, local-memory checkpointer, registry, sandbox, and
-  logging adapters.
+- `src/application/` use cases, ports, validation policy, and registry policy.
+- `src/infrastructure/` PostgreSQL, file, LLM, local-memory checkpointer, Pydantic schema,
+  filesystem probe, registry bindings, sandbox, and logging adapters.
 - `src/interfaces/` FastAPI routes and schemas.
 - `src/main.py` composition root.
 - `tests/` unit, integration, edge-case, and security tests.
@@ -77,10 +84,12 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 
 - `interfaces/` receives requests and calls `application/` use cases.
 - `application/` assesses sources, builds and validates plans, then calls `infrastructure/`
-  adapters.
-- `infrastructure/` reads/writes PostgreSQL and files, calls LLMs, checkpoints state, and runs
-  sandboxed steps.
+  adapters through ports.
+- `infrastructure/` reads/writes PostgreSQL and files, calls LLMs, checkpoints state, parses
+  JSON plans, probes the workspace, and runs sandboxed steps.
 - `domain/` holds shared entities and validates core invariants.
+- Plan validation and registry allowlists are application policy; Pydantic schemas,
+  filesystem inspection, and concrete callables are infrastructure adapters.
 - Run artifacts and logs are written under `artifacts/<run_id>/` and `logs/`.
 - The registry, plan, transform log, and execution log are the boundaries between modules.
 - The source-only branch uses the assessment use case and writes only assessment artifacts;

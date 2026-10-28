@@ -19,8 +19,8 @@ main (composition root) -> interfaces + infrastructure
 ```
 
 - `domain/`: enterprise rules and entities. No frameworks or infrastructure imports.
-- `application/`: use cases, ports, and inward-facing DTOs.
-- `infrastructure/`: framework, persistence, model, sandbox, and logging adapters.
+- `application/`: use cases, ports, validation policy, registry policy, and inward-facing DTOs.
+- `infrastructure/`: framework, persistence, serialization, filesystem, sandbox, and logging adapters.
 - `interfaces/`: FastAPI routes and request/response schemas.
 - `main.py`: composition root; the only place that wires concrete adapters.
 
@@ -112,8 +112,9 @@ new DataFrame, validates its columns, preserves the input, and raises
 | `standardize_column_names` | Produces collision-free snake_case names with case policy. |
 | `cast_column` | Casts one column to string, integer, or float with raise/coerce modes. |
 
-These modules are registered in registry version `1.0.0`. Registry integration lives in
-`src/infrastructure/registry/` and exposes metadata through
+These modules are registered in registry version `1.0.0`. The allowlist policy lives in
+`src/application/registry/specs.py`, concrete pandas callables are bound in
+`src/infrastructure/registry/bindings.py`, and metadata is exposed through
 `src/application/ports/module_registry.py`.
 
 ## Module registry
@@ -132,7 +133,9 @@ Any drift raises `RegistryError` and prevents the application from starting.
 ## Plan validation
 
 Structured plans use a strict Pydantic schema (`extra="forbid"`) in
-`src/infrastructure/validation/plan_schema.py`. `PlanValidator` then checks, in order:
+`src/infrastructure/validation/plan_schema.py`. The schema is an ingress adapter: it
+translates JSON into domain entities, while the policy checks live in
+`src/application/validation/`. `PlanValidator` then checks, in order:
 
 1. schema, mode, and step identifiers;
 2. registry allowlist and assessment read-only rules;
@@ -143,10 +146,16 @@ Structured plans use a strict Pydantic schema (`extra="forbid"`) in
 6. unsafe code, raw SQL, and embedded credentials;
 7. approval for writes, DDL, destructive transformations, and secret-bearing operations.
 
-`PlanValidator` accepts either an `ExecutionPlan` or a JSON-compatible plan payload. Every
-failure raises `PlanValidationError` with a stable code and sanitized context. Validation
-checks are independent `PlanCheck` implementations assembled by `build_default_checks`;
-callers can inject a custom pipeline with `PlanValidator(..., checks=(...))`.
+`src/application/validation/plan_validator.py` validates domain plans and has no Pydantic
+or filesystem dependency. `src/infrastructure/validation/plan_validator.py` is the
+JSON-facing facade: it accepts either an `ExecutionPlan` or a JSON-compatible payload,
+parses the payload, and delegates inward. Filesystem path inspection is isolated behind
+`WorkspaceProbePort` and implemented by `FilesystemWorkspaceProbe`.
+
+Every failure raises `PlanValidationError` with a stable code and sanitized context.
+Validation checks are independent `PlanCheck` implementations assembled by
+`build_default_checks`; callers can inject a custom pipeline with
+`PlanValidator(..., checks=(...))`.
 
 ## Security baseline
 
@@ -167,6 +176,10 @@ for agent behavior.
 src/
   domain/
   application/
+    ports/
+    registry/
+    use_cases/
+    validation/
   infrastructure/
   interfaces/
   main.py

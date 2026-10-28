@@ -2,6 +2,7 @@
 
 from infrastructure.registry.catalog import (
     ALLOWED_MODULE_PREFIX,
+    MODULE_FUNCTIONS,
     MODULE_SPECS,
     OUTPUT_DESCRIPTION,
     REGISTRY_VERSION,
@@ -24,6 +25,7 @@ from infrastructure.registry.validators import (
 
 __all__ = [
     "ALLOWED_MODULE_PREFIX",
+    "MODULE_FUNCTIONS",
     "MODULE_SPECS",
     "OUTPUT_DESCRIPTION",
     "REGISTRY_VERSION",

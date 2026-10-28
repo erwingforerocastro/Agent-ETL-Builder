@@ -1,5 +1,9 @@
-"""Registry constants."""
+"""Backward-compatible exports for registry constants."""
 
-REGISTRY_VERSION = "1.0.0"
-ALLOWED_MODULE_PREFIX = "infrastructure."
-OUTPUT_DESCRIPTION = "Transformed DataFrame."
+from application.registry.constants import (
+    ALLOWED_MODULE_PREFIX,
+    OUTPUT_DESCRIPTION,
+    REGISTRY_VERSION,
+)
+
+__all__ = ["ALLOWED_MODULE_PREFIX", "OUTPUT_DESCRIPTION", "REGISTRY_VERSION"]

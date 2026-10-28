@@ -1,48 +1,6 @@
-"""Structured errors raised while validating plans."""
+"""Backward-compatible exports for plan validation errors."""
 
-from collections.abc import Mapping
-
-from domain.errors import RegistryError
-
-
-class PlanValidationError(RegistryError):
-    """A plan failed schema, registry, argument, path, limit, security, or approval checks."""
-
-    def __init__(
-        self,
-        *,
-        code: str,
-        message: str,
-        module: str,
-        context: Mapping[str, object] | None = None,
-    ) -> None:
-        super().__init__(
-            code=code,
-            message=message,
-            module=module,
-            context=context,
-        )
-
-
-class PlanValidationErrorFactory:
-    """Builds structured errors for plan validation checks."""
-
-    def __init__(self, module: str = __name__) -> None:
-        self._module = module
-
-    def error(
-        self,
-        *,
-        code: str,
-        message: str,
-        context: Mapping[str, object] | None = None,
-    ) -> PlanValidationError:
-        return PlanValidationError(
-            code=code,
-            message=message,
-            module=self._module,
-            context=context,
-        )
-
+from application.validation.errors import PlanValidationErrorFactory
+from domain.errors import PlanValidationError
 
 __all__ = ["PlanValidationError", "PlanValidationErrorFactory"]

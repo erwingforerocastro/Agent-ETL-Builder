@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from application.validation.errors import PlanValidationErrorFactory
+from application.validation.operations import OperationPolicy, iter_operations
 from domain.entities.plan import ExecutionPlan
-from infrastructure.validation.errors import PlanValidationErrorFactory
-from infrastructure.validation.operations import OperationPolicy, iter_operations
 
 
 class ApprovalValidator:

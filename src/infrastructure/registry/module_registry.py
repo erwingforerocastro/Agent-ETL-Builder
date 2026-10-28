@@ -4,10 +4,10 @@ from collections.abc import Callable, Mapping
 
 import pandas as pd
 
+from application.registry.constants import REGISTRY_VERSION
 from domain.entities.registry import ModuleMetadata, RegistrySnapshot
 from domain.errors import RegistryError
-from infrastructure.registry.catalog import MODULE_SPECS
-from infrastructure.registry.constants import REGISTRY_VERSION
+from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.functions import build_snapshot
 
 
@@ -81,7 +81,7 @@ class ModuleRegistry:
 def build_module_registry() -> ModuleRegistry:
     return ModuleRegistry(
         snapshot=build_snapshot(),
-        functions={spec.name: spec.function for spec in MODULE_SPECS},
+        functions=MODULE_FUNCTIONS,
     )
 
 

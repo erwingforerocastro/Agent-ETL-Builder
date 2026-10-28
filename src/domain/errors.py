@@ -45,3 +45,7 @@ class TransformationError(EtlError):
 
 class RegistryError(EtlError):
     """The module registry is invalid or a lookup failed."""
+
+
+class PlanValidationError(EtlError):
+    """A plan failed schema, registry, argument, path, limit, security, or approval checks."""

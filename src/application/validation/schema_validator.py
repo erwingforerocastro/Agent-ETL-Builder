@@ -4,6 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from application.validation.constants import (
+    ON_ERROR_POLICIES,
+    OPERATION_PATTERN,
+    PLAN_MODES,
+    STEP_ID_PATTERN,
+    SUPPORTED_PLAN_VERSIONS,
+)
+from application.validation.errors import PlanValidationErrorFactory
+from application.validation.operations import iter_operations
 from domain.entities.plan import (
     ExecutionPlan,
     PlanChunking,
@@ -11,15 +20,6 @@ from domain.entities.plan import (
     PlanSource,
     PlanTransformation,
 )
-from infrastructure.validation.constants import (
-    ON_ERROR_POLICIES,
-    OPERATION_PATTERN,
-    PLAN_MODES,
-    STEP_ID_PATTERN,
-    SUPPORTED_PLAN_VERSIONS,
-)
-from infrastructure.validation.errors import PlanValidationErrorFactory
-from infrastructure.validation.operations import iter_operations
 
 
 class SchemaValidator:

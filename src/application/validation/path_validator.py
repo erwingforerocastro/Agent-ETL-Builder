@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from pathlib import PurePosixPath
 
-from domain.entities.plan import ExecutionPlan
-from domain.entities.registry import ModuleInput
-from infrastructure.validation.constants import (
+from application.ports.workspace import WorkspacePathError, WorkspaceProbePort
+from application.validation.constants import (
     DRIVE_PREFIX,
     PATH_KEYS,
     PATH_SUFFIXES,
     WINDOWS_RESERVED_NAME,
 )
-from infrastructure.validation.errors import PlanValidationErrorFactory
-from infrastructure.validation.operations import OperationPolicy, iter_operations
-from infrastructure.validation.settings import PlanValidationSettings
+from application.validation.errors import PlanValidationErrorFactory
+from application.validation.operations import OperationPolicy, iter_operations
+from application.validation.settings import PlanValidationSettings
+from domain.entities.plan import ExecutionPlan
+from domain.entities.registry import ModuleInput
 
 
 class PathValueValidator:
@@ -25,9 +25,11 @@ class PathValueValidator:
     def __init__(
         self,
         settings: PlanValidationSettings,
+        workspace: WorkspaceProbePort,
         error_factory: PlanValidationErrorFactory | None = None,
     ) -> None:
         self._settings = settings
+        self._workspace = workspace
         self._error_factory = error_factory or PlanValidationErrorFactory()
 
     def validate(self, value: object, *, label: str) -> None:
@@ -130,56 +132,37 @@ class PathValueValidator:
                     context={"step": label, "path": value},
                 )
 
-        workspace_root = self._settings.workspace_root
-        candidate = workspace_root.joinpath(*parts)
-        try:
-            resolved = candidate.resolve(strict=False)
-        except OSError as exc:
+        info = self._workspace.inspect(parts)
+        if info.error is WorkspacePathError.RESOLVE_FAILED:
             raise self._error_factory.error(
                 code="PLAN_INVALID_PATH",
                 message="Path could not be resolved",
                 context={"step": label},
-            ) from exc
-
-        try:
-            common = os.path.commonpath([str(workspace_root), str(resolved)])
-        except ValueError as exc:
-            raise self._error_factory.error(
-                code="PLAN_PATH_OUTSIDE_WORKSPACE",
-                message="Path must be within the workspace",
-                context={"step": label, "path": value},
-            ) from exc
-        if os.path.normcase(common) != os.path.normcase(str(workspace_root)):
+            )
+        if info.error is WorkspacePathError.OUTSIDE_WORKSPACE:
             raise self._error_factory.error(
                 code="PLAN_PATH_OUTSIDE_WORKSPACE",
                 message="Path must be within the workspace",
                 context={"step": label, "path": value},
             )
-        if len(str(resolved)) > self._settings.max_path_length:
+        if info.error is WorkspacePathError.INSPECT_FAILED:
+            raise self._error_factory.error(
+                code="PLAN_INVALID_PATH",
+                message="Path could not be inspected",
+                context={"step": label},
+            )
+        if len(info.resolved) > self._settings.max_path_length:
             raise self._error_factory.error(
                 code="PLAN_PATH_TOO_LONG",
                 message="Resolved path exceeds the maximum length",
                 context={"step": label},
             )
-
-        current = workspace_root
-        for part in parts:
-            current = current / part
-            try:
-                if current.is_symlink():
-                    raise self._error_factory.error(
-                        code="PLAN_PATH_SYMLINK",
-                        message="Symlinks are not allowed",
-                        context={"step": label, "path": value},
-                    )
-                if not current.exists():
-                    break
-            except OSError as exc:
-                raise self._error_factory.error(
-                    code="PLAN_INVALID_PATH",
-                    message="Path could not be inspected",
-                    context={"step": label},
-                ) from exc
+        if info.symlink:
+            raise self._error_factory.error(
+                code="PLAN_PATH_SYMLINK",
+                message="Symlinks are not allowed",
+                context={"step": label, "path": value},
+            )
 
 
 class PlanPathValidator:

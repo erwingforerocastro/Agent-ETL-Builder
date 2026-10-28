@@ -1,11 +1,5 @@
-"""Protocol for a single plan validation pass."""
+"""Backward-compatible export for the plan check protocol."""
 
-from typing import Protocol
+from application.validation.plan_check import PlanCheck
 
-from domain.entities.plan import ExecutionPlan
-
-
-class PlanCheck(Protocol):
-    """A focused validation pass over an execution plan."""
-
-    def validate(self, plan: ExecutionPlan) -> None: ...
+__all__ = ["PlanCheck"]

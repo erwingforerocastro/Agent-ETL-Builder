@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import inspect
 import types
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, Literal, Union, get_args, get_origin, get_type_hints
+from typing import Literal, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
+from application.registry.constants import ALLOWED_MODULE_PREFIX, OUTPUT_DESCRIPTION
+from application.registry.specs import ModuleSpec
+from application.validation.types import value_matches_type
 from domain.entities.registry import (
     ModuleInput,
     ModuleMetadata,
@@ -17,13 +20,6 @@ from domain.entities.registry import (
     RegistrySnapshot,
 )
 from domain.errors import RegistryError
-from infrastructure.registry.constants import (
-    ALLOWED_MODULE_PREFIX,
-    OUTPUT_DESCRIPTION,
-)
-
-if TYPE_CHECKING:
-    from infrastructure.registry.catalog import ModuleSpec
 
 
 class RegistryValidator:
@@ -114,26 +110,7 @@ class TypeValidator:
         self._error_factory = error_factory or RegistryValidator()
 
     def value_matches_type(self, value: object, declared: str) -> bool:
-        if value is None:
-            return declared == "null" or declared.endswith(" | null")
-
-        base = declared.removesuffix(" | null")
-        if base == "string":
-            return isinstance(value, str)
-        if base == "integer":
-            return isinstance(value, int) and not isinstance(value, bool)
-        if base == "number":
-            return isinstance(value, int | float) and not isinstance(value, bool)
-        if base == "boolean":
-            return isinstance(value, bool)
-        if base.startswith("enum[") and base.endswith("]"):
-            return isinstance(value, str) and value in base[5:-1].split("|")
-        if base.startswith("array[") and base.endswith("]"):
-            item_type = base[6:-1]
-            return isinstance(value, list | tuple) and all(
-                self.value_matches_type(item, item_type) for item in value
-            )
-        return False
+        return value_matches_type(value, declared)
 
     def validate_example_value(
         self,
@@ -272,16 +249,20 @@ class ModuleMetadataBuilder:
         self._example_validator = example_validator or ExampleValidator()
         self._error_factory = error_factory or RegistryValidator()
 
-    def metadata_for(self, spec: ModuleSpec) -> ModuleMetadata:
+    def metadata_for(
+        self,
+        spec: ModuleSpec,
+        function: Callable[..., pd.DataFrame],
+    ) -> ModuleMetadata:
         self._dependency_validator.validate_dependencies(spec)
-        if spec.name != spec.function.__name__:
+        if spec.name != function.__name__:
             raise self._error_factory.create_error(
                 code="REGISTRY_SIGNATURE_MISMATCH",
                 message="Registry name does not match the callable name",
-                context={"module": spec.name, "function": spec.function.__name__},
+                context={"module": spec.name, "function": function.__name__},
                 module_name=spec.name,
             )
-        module_path = spec.function.__module__
+        module_path = function.__module__
         if not module_path.startswith(ALLOWED_MODULE_PREFIX):
             raise self._error_factory.create_error(
                 code="REGISTRY_INVALID_MODULE_PATH",
@@ -291,8 +272,8 @@ class ModuleMetadataBuilder:
             )
 
         try:
-            signature = inspect.signature(spec.function)
-            hints = get_type_hints(spec.function)
+            signature = inspect.signature(function)
+            hints = get_type_hints(function)
         except (NameError, TypeError, ValueError) as exc:
             raise self._error_factory.create_error(
                 code="REGISTRY_UNSUPPORTED_SIGNATURE",
@@ -375,7 +356,7 @@ class ModuleMetadataBuilder:
             name=spec.name,
             version=spec.version,
             module=module_path,
-            function=spec.function.__name__,
+            function=function.__name__,
             description=spec.description,
             inputs=tuple(inputs),
             output=ModuleOutput(type="DataFrame", description=OUTPUT_DESCRIPTION),
@@ -398,19 +379,40 @@ class RegistrySnapshotBuilder:
     def build_snapshot(
         self,
         specs: Sequence[ModuleSpec],
+        functions: Mapping[str, Callable[..., pd.DataFrame]],
         registry_version: str = "1.0.0",
     ) -> RegistrySnapshot:
         names = [spec.name for spec in specs]
+        error_factory = RegistryValidator()
         if len(names) != len(set(names)):
             duplicates = sorted({name for name in names if names.count(name) > 1})
-            error_factory = RegistryValidator()
             raise error_factory.create_error(
                 code="REGISTRY_DUPLICATE_MODULE",
                 message="Registry contains duplicate module names",
                 context={"modules": duplicates},
                 module_name=__name__,
             )
-        modules = tuple(self._metadata_builder.metadata_for(spec) for spec in specs)
+
+        missing = sorted(set(names) - set(functions))
+        if missing:
+            raise error_factory.create_error(
+                code="REGISTRY_MISSING_FUNCTION",
+                message="Registry spec has no bound callable",
+                context={"modules": missing},
+                module_name=__name__,
+            )
+        unknown = sorted(set(functions) - set(names))
+        if unknown:
+            raise error_factory.create_error(
+                code="REGISTRY_UNKNOWN_FUNCTION",
+                message="Registry contains a callable without a spec",
+                context={"modules": unknown},
+                module_name=__name__,
+            )
+
+        modules = tuple(
+            self._metadata_builder.metadata_for(spec, functions[spec.name]) for spec in specs
+        )
         return RegistrySnapshot(version=registry_version, modules=modules)
 
 
@@ -484,6 +486,9 @@ def _validate_examples(
     validator.validate_examples(spec=spec, inputs=tuple(inputs))
 
 
-def _metadata_for(spec: ModuleSpec) -> ModuleMetadata:
+def _metadata_for(
+    spec: ModuleSpec,
+    function: Callable[..., pd.DataFrame],
+) -> ModuleMetadata:
     builder = ModuleMetadataBuilder()
-    return builder.metadata_for(spec)
+    return builder.metadata_for(spec, function)

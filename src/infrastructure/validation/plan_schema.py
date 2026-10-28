@@ -8,14 +8,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from domain.entities.plan import (
-    ExecutionPlan,
-    PlanChunking,
-    PlanDestination,
-    PlanSource,
-    PlanTransformation,
-)
-from infrastructure.validation.constants import (
+from application.validation.constants import (
     OPERATION_PATTERN,
     RUN_ID_PATTERN,
     SCHEMA_MAX_PARAM_DEPTH,
@@ -23,7 +16,14 @@ from infrastructure.validation.constants import (
     SCHEMA_MAX_STRING_LENGTH,
     STEP_ID_PATTERN,
 )
-from infrastructure.validation.errors import PlanValidationError
+from domain.entities.plan import (
+    ExecutionPlan,
+    PlanChunking,
+    PlanDestination,
+    PlanSource,
+    PlanTransformation,
+)
+from domain.errors import PlanValidationError
 
 
 class _StrictModel(BaseModel):

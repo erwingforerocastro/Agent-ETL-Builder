@@ -1,73 +1,36 @@
-"""Plan interpreter - executes validated plans through allowlisted functions."""
+"""Backward-compatible interpreter facade."""
 
 from typing import Any
 
-import pandas as pd
-
 from application.ports.module_registry import ModuleRegistryPort
+from application.use_cases.execute_plan import (
+    ExecutePlanUseCase,
+    PlanExecutionError,
+    PlanExecutionResult,
+)
 from domain.entities.plan import ExecutionPlan
+from infrastructure.interpreter.step_runner import SandboxStepRunner
 from infrastructure.sandbox.executor import SandboxExecutor
 from infrastructure.sandbox.limits import SandboxLimits
 
-
-class InterpreterError(Exception):
-    pass
+InterpreterError = PlanExecutionError
 
 
 class PlanInterpreter:
+    """Facade that executes plans through the execute-plan use case."""
+
     def __init__(
         self,
         registry: ModuleRegistryPort,
         sandbox: SandboxExecutor | None = None,
         limits: SandboxLimits | None = None,
     ) -> None:
-        self._registry = registry
-        self._sandbox = sandbox or SandboxExecutor(limits or SandboxLimits())
+        runner = SandboxStepRunner(registry, sandbox=sandbox, limits=limits)
+        self._use_case = ExecutePlanUseCase(runner)
 
     def execute(self, plan: ExecutionPlan) -> dict[str, Any]:
-        result: dict[str, Any] = {"status": "success", "outputs": []}
-        df: pd.DataFrame | None = None
+        result: PlanExecutionResult = self._use_case.execute(plan)
+        return result.to_dict()
 
-        # Execute source
-        if plan.source is not None:
-            func = self._registry.function_for(plan.source.operation)
-            try:
-                df = self._sandbox.run(func, **plan.source.params)
-            except TypeError:
-                try:
-                    if df is not None:
-                        df = self._sandbox.run(func, df, **plan.source.params)
-                    else:
-                        df = self._sandbox.run(func, **plan.source.params)
-                except Exception:
-                    df = self._sandbox.run(func, pd.DataFrame(), **plan.source.params)
 
-        # Execute transformations
-        for step in plan.transformations:
-            if df is None:
-                raise InterpreterError("No DataFrame available for transformation")
-            func = self._registry.function_for(step.operation)
-            try:
-                df = self._sandbox.run(func, df, **step.params)
-            except Exception:
-                if plan.on_error == "fail_fast":
-                    raise
-                # continue on error
-                continue
-
-        # Execute destination
-        if plan.destination is not None:
-            if df is None:
-                raise InterpreterError("No DataFrame available for destination")
-            func = self._registry.function_for(plan.destination.operation)
-            try:
-                out = self._sandbox.run(func, df, **plan.destination.params)
-                result["outputs"].append(out)
-            except Exception:
-                if plan.on_error == "fail_fast":
-                    raise
-        else:
-            # assessment mode
-            result["dataframe"] = df
-
-        return result
+__all__ = ["InterpreterError", "PlanInterpreter"]
