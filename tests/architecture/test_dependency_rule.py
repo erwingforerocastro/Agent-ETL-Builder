@@ -17,9 +17,10 @@ FRAMEWORK_MODULES = frozenset(
     {
         "fastapi",
         "langgraph",
-        "mysql",
         "pandas",
-        "pymysql",
+        "postgresql",
+        "psycopg",
+        "psycopg2",
         "sqlalchemy",
         "starlette",
         "uvicorn",

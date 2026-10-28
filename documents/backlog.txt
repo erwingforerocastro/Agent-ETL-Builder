@@ -11,22 +11,22 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 | DOC-1 | P0 | Documentation baseline | - | Architecture, security, and backlog exist and match requirements. | Done |
 | FND-1 | P0 | Project skeleton | DOC-1 | `src/` layers, `tests/`, `pyproject.toml`, README, lint, format, and type-check commands work. | Done |
 | ST-1 | P0 | Local-memory checkpointer | FND-1 | LangGraph in-memory checkpointer works; state is process-local; restart behavior is documented. | Done |
-| DB-1 | P1 | MySQL connectivity | FND-1 | Connection, parameterized read/write, TLS configuration, and temporary test schema are tested. | Pending |
+| DB-1 | P1 | PostgreSQL connectivity | FND-1 | Connection, parameterized read/write, TLS configuration, and temporary test schema are tested. | Pending |
 | REG-1 | P0 | Module registry | FND-1 | Versioned allowlist, signature-derived metadata, examples, and contract tests are in place. | Done |
 | PLN-1 | P0 | Plan schema and validator | REG-1 | Schema, argument, path, limit, security, and approval validation reject unsafe plans. | Pending |
 | EXE-1 | P0 | Interpreter and sandbox | PLN-1, ST-1 | Only validated steps run; no generated code; timeout, memory, filesystem, and network limits are tested. | Pending |
 | WF-1 | P0 | Bounded agent workflow | PLN-1, EXE-1 | Clarification, approval, execution, retry, cancel, and cleanup paths reach a terminal state. | Pending |
-| ING-1 | P1 | Ingestion adapters | FND-1, DB-1 | CSV, JSON/JSONL, Parquet, and MySQL reads are read-only, chunked, and produce stable IDs. | Pending |
+| ING-1 | P1 | Ingestion adapters | FND-1, DB-1 | CSV, JSON/JSONL, Parquet, and PostgreSQL reads are read-only, chunked, and produce stable IDs. | Pending |
 | PRF-1 | P1 | Profiling and chunk merge | ING-1 | Quality/info metrics use explicit formulas; per-chunk records merge correctly; accuracy is `N/A`. | Pending |
 | ASM-1 | P1 | Source-only assessment and draft plan | ING-1, PRF-1, PLN-1, EXE-1 | Source-only intent is detected; read-only assessment runs; draft plan lists issues, assumptions, and missing inputs; no writes; confirmation builds an executable plan. | Pending |
 | TRN-0 | P1 | Reusable transformation modules | FND-1 | Separate, deterministic, idempotent modules are added in batches of five; inputs are not mutated; failures use structured errors. | In progress |
 | TRN-1 | P1 | Transformation DSL | TRN-0, PLN-1 | Cleansing, casting, standardization, filtering, and imputation are deterministic and idempotent. | Pending |
-| LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and MySQL insert/upsert/truncate modes are transactional and safe. | Pending |
+| LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and PostgreSQL insert/upsert/truncate modes are transactional and safe. | Pending |
 | MON-1 | P1 | Monitoring and errors | FND-1 | Transform CSV, execution JSONL, error taxonomy, redaction, and fallback logging work. | Pending |
 | API-1 | P1 | FastAPI interface | WF-1 | Run create/status/approve/cancel/logs/health endpoints meet the API contract. | Pending |
 | TST-1 | P1 | Test and evaluation suite | REG-1, PLN-1, EXE-1, ASM-1 | Unit, integration, edge-case, security, regression, and golden-plan tests pass; core coverage is at least 80%. | Pending |
 | EXP-1 | P2 | Python export | PLN-1, TST-1 | Fixed templates produce an export artifact that is never executed. | Pending |
-| ADP-1 | P2 | Future database adapters | LOD-1 | PostgreSQL, Oracle, or MongoDB adapters pass the shared adapter contract tests. | Pending |
+| ADP-1 | P2 | Future database adapters | LOD-1 | MySQL, Oracle, or MongoDB adapters pass the shared adapter contract tests. | Pending |
 | OBS-1 | P2 | Dashboards and alerts | MON-1 | Metrics and traces are visible; alert rules are documented and tested. | Pending |
 
 ## Risks

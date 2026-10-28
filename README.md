@@ -4,7 +4,7 @@ Local-first agent that builds validated ETL pipelines from a structured request 
 source-only assessment.
 
 **Status:** FND-1, ST-1, and REG-1 complete. Five transformations are registered in the
-versioned allowlist. Plan validation, the LangGraph workflow, and MySQL adapters are not
+versioned allowlist. Plan validation, the LangGraph workflow, and PostgreSQL adapters are not
 implemented yet.
 
 ## Architecture
@@ -95,7 +95,7 @@ V1 uses a single LangGraph `InMemorySaver` created in `src/main.py` and exposed 
 - Each application process or worker has isolated state; do not run multiple workers when
   conversation continuity is required.
 - Plans, lineage, and run artifacts must be persisted separately from checkpoints.
-- A persistent MySQL checkpointer is deferred to a later version.
+- A persistent PostgreSQL checkpointer is deferred to a later version.
 
 ## Implemented transformations
 

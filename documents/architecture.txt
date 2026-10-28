@@ -8,13 +8,13 @@ Scope: Module and file organization only.
 ## Clean architecture
 
 Dependency rule: source dependencies point inward. Domain code must not import
-LangGraph, FastAPI, pandas, MySQL drivers, or other infrastructure.
+LangGraph, FastAPI, pandas, PostgreSQL drivers, or other infrastructure.
 
 | Layer | Responsibility |
 |---|---|
 | domain/entities | Plans, registry entries, runs, artifacts, approvals, errors |
 | application/use_cases | Assess sources, build/validate/execute plans, profile, merge, load, report, cancel |
-| infrastructure/adapters | MySQL, files, LLM providers, local-memory checkpointer, sandbox, logs |
+| infrastructure/adapters | PostgreSQL, files, LLM providers, local-memory checkpointer, sandbox, logs |
 | interfaces/API | FastAPI routes and request/response schemas |
 
 V1 uses the LangGraph local in-memory checkpointer. Checkpoints are process-local and
@@ -26,10 +26,10 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - Plan builder/validator: schema, allowlist, arguments, paths, limits, security, approval.
 - Source assessor: read-only source validation, sampling, profiling, and draft-plan inputs.
 - Interpreter: executes validated steps by calling registry functions.
-- Ingestion adapters: CSV, JSON/JSONL, Parquet, and MySQL.
+- Ingestion adapters: CSV, JSON/JSONL, Parquet, and PostgreSQL.
 - Profiling and chunk merger: quality/info metrics with mergeable per-chunk state.
 - Transformation DSL: cleansing, casting, standardization, filtering, and imputation.
-- Loaders: atomic file writes and transactional MySQL insert/upsert.
+- Loaders: atomic file writes and transactional PostgreSQL insert/upsert.
 - Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
 - State and lineage: local in-memory checkpoints; plans, approvals, hashes, logs, and
   artifacts stored per run.
@@ -63,7 +63,7 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 
 - `src/domain/` entities and contracts.
 - `src/application/` use cases and ports.
-- `src/infrastructure/` MySQL, file, LLM, local-memory checkpointer, registry, sandbox, and
+- `src/infrastructure/` PostgreSQL, file, LLM, local-memory checkpointer, registry, sandbox, and
   logging adapters.
 - `src/interfaces/` FastAPI routes and schemas.
 - `src/main.py` composition root.
@@ -78,7 +78,7 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - `interfaces/` receives requests and calls `application/` use cases.
 - `application/` assesses sources, builds and validates plans, then calls `infrastructure/`
   adapters.
-- `infrastructure/` reads/writes MySQL and files, calls LLMs, checkpoints state, and runs
+- `infrastructure/` reads/writes PostgreSQL and files, calls LLMs, checkpoints state, and runs
   sandboxed steps.
 - `domain/` holds shared entities and validates core invariants.
 - Run artifacts and logs are written under `artifacts/<run_id>/` and `logs/`.
