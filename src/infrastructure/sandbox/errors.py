@@ -2,11 +2,7 @@
 
 from collections.abc import Mapping
 
-from domain.errors import EtlError
-
-
-class SandboxError(EtlError):
-    """Base error for sandboxed execution."""
+from domain.errors import SandboxError
 
 
 class SandboxTimeoutError(SandboxError):

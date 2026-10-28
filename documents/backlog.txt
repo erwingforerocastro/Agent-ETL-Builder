@@ -1,8 +1,8 @@
 # Agent ETL Builder - Backlog
 
-Version: 0.8
-Status: PLN-1 complete; EXE-1 next; TRN-0 in progress
-Last updated: 2026-10-27
+Version: 1.0
+Status: WF-1 complete; API-1 next; TRN-0 in progress
+Last updated: 2026-10-28
 
 Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 
@@ -14,8 +14,8 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 | DB-1 | P1 | PostgreSQL connectivity | FND-1 | Connection, parameterized read/write, TLS configuration, and temporary test schema are tested. | Pending |
 | REG-1 | P0 | Module registry | FND-1 | Versioned allowlist, signature-derived metadata, examples, and contract tests are in place. | Done |
 | PLN-1 | P0 | Plan schema and validator | REG-1 | Schema, argument, path, limit, security, and approval validation reject unsafe plans. | Done |
-| EXE-1 | P0 | Interpreter and sandbox | PLN-1, ST-1 | Only validated steps run; no generated code; timeout, memory, filesystem, and network limits are tested. | Pending |
-| WF-1 | P0 | Bounded agent workflow | PLN-1, EXE-1 | Clarification, approval, execution, retry, cancel, and cleanup paths reach a terminal state. | Pending |
+| EXE-1 | P0 | Interpreter and sandbox | PLN-1, ST-1 | Only validated steps run; no generated code; timeout, memory, filesystem, and network limits are tested. | Done |
+| WF-1 | P0 | Bounded agent workflow | PLN-1, EXE-1 | Clarification, approval, execution, retry, cancel, and cleanup paths reach a terminal state. | Done |
 | ING-1 | P1 | Ingestion adapters | FND-1, DB-1 | CSV, JSON/JSONL, Parquet, and PostgreSQL reads are read-only, chunked, and produce stable IDs. | Pending |
 | PRF-1 | P1 | Profiling and chunk merge | ING-1 | Quality/info metrics use explicit formulas; per-chunk records merge correctly; accuracy is `N/A`. | Pending |
 | ASM-1 | P1 | Source-only assessment and draft plan | ING-1, PRF-1, PLN-1, EXE-1 | Source-only intent is detected; read-only assessment runs; draft plan lists issues, assumptions, and missing inputs; no writes; confirmation builds an executable plan. | Pending |
@@ -32,7 +32,15 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 ## Risks
 
 - In-memory checkpoints do not survive process restarts; v1 has no crash resume.
-- Sandbox behavior on Windows must be proven before execution work is accepted.
+- The v1 sandbox is an in-process guard proven on Windows; OS-level isolation, hard CPU/OOM
+  enforcement, and process cleanup remain hardening items.
+- WF-1 cancellation is honored at step, retry, and approval boundaries; a currently running
+  step is bounded by the sandbox timeout rather than interrupted mid-step.
+- Workflow checkpoints are in memory only. Restarting the process loses active runs and has
+  no crash resume in v1.
+- Approval timeout defaults to 300 seconds and is configurable with
+  `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS`; cleanup is configurable with
+  `AGENT_ETL_CLEANUP_POLICY=cleanup|retain`.
 - Exact profiling metrics can exhaust memory; spill limits must be defined.
 - Sampling may miss rare issues; assessment scope and confidence must be visible.
 - Draft plans can remain incomplete until the destination is supplied.
@@ -41,4 +49,5 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 
 ## Review gate
 
-Do not start application code until architecture, security, and backlog are reviewed.
+Architecture, security, and backlog were reviewed before implementation. Re-review them
+before changing scope, security controls, or persistence guarantees.

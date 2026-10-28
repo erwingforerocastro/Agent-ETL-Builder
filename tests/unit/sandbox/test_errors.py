@@ -1,6 +1,6 @@
 """Unit tests for sandbox error contracts."""
 
-from domain.errors import EtlError
+from domain.errors import EtlError, SandboxError
 from infrastructure.sandbox import SandboxTimeoutError, SandboxViolationError
 
 
@@ -8,6 +8,7 @@ def test_sandbox_timeout_error_is_structured() -> None:
     error = SandboxTimeoutError()
 
     assert isinstance(error, EtlError)
+    assert isinstance(error, SandboxError)
     assert error.code == "SANDBOX_TIMEOUT"
     assert error.to_dict()["type"] == "SandboxTimeoutError"
 

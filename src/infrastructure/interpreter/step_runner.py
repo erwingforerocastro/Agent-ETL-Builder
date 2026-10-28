@@ -6,7 +6,6 @@ import pandas as pd
 
 from application.ports.module_registry import ModuleRegistryPort
 from infrastructure.sandbox.executor import SandboxExecutor
-from infrastructure.sandbox.limits import SandboxLimits
 
 
 class SandboxStepRunner:
@@ -15,11 +14,10 @@ class SandboxStepRunner:
     def __init__(
         self,
         registry: ModuleRegistryPort,
-        sandbox: SandboxExecutor | None = None,
-        limits: SandboxLimits | None = None,
+        sandbox: SandboxExecutor,
     ) -> None:
         self._registry = registry
-        self._sandbox = sandbox or SandboxExecutor(limits or SandboxLimits())
+        self._sandbox = sandbox
 
     def run_source(self, operation: str, params: Mapping[str, object]) -> object:
         function = self._registry.function_for(operation)

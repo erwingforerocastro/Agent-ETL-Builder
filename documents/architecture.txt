@@ -1,9 +1,9 @@
 # Agent ETL Builder - Architecture
 
-Version: 0.9
-Status: PLN-1 implemented; EXE-1 next; TRN-0 in progress
-Last updated: 2026-10-27
-Scope: Module and file organization only.
+Version: 1.1
+Status: PLN-1, EXE-1, and WF-1 implemented; API-1 next; TRN-0 in progress
+Last updated: 2026-10-28
+Scope: Module organization and runtime boundaries.
 
 ## Clean architecture
 
@@ -13,14 +13,16 @@ LangGraph, FastAPI, pandas, PostgreSQL drivers, or other infrastructure.
 | Layer | Responsibility |
 |---|---|
 | domain/entities | Plans, registry entries, runs, artifacts, approvals, errors |
-| application/use_cases | Assess sources, build/validate/execute plans, profile, merge, load, report, cancel |
+| application/use_cases | Assess sources, build/validate/execute plans, run the bounded workflow, profile, merge, load, report, cancel |
 | application/validation | Plan validation policy: schema, registry, arguments, paths, limits, security, approval |
 | application/registry | Allowlist specs, versions, constraints, examples, and side-effect policy |
 | infrastructure/adapters | PostgreSQL, files, LLM providers, local-memory checkpointer, sandbox, logs |
 | interfaces/API | FastAPI routes and request/response schemas |
 
-V1 uses the LangGraph local in-memory checkpointer. Checkpoints are process-local and
-are lost when the process restarts. Multiple workers do not share checkpoints.
+V1 uses a process-local in-memory run checkpoint port (`RunCheckpointPort`). The current
+adapter is `InMemoryRunCheckpoint`; LangGraph's `InMemorySaver` remains available for
+future graph-based workflows. Checkpoints are lost when the process restarts. Multiple
+workers do not share checkpoints.
 
 ## Components and modules
 
@@ -31,19 +33,43 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   Policy checks live in `application/validation`; Pydantic parsing, plan size measurement,
   and filesystem probing are infrastructure adapters.
 - Source assessor: read-only source validation, sampling, profiling, and draft-plan inputs.
-- Interpreter: an application use case orchestrates validated steps through a step-runner
-  port; pandas and sandbox mechanics live in infrastructure.
+- Interpreter: an application use case validates the plan, then orchestrates steps through
+  a step-runner port; pandas and sandbox mechanics live in infrastructure.
+- Sandbox: one serialized in-process execution guard. It confines file content access to
+  the workspace (read-only runtime paths are allowed), denies network access, bounds
+  wall-clock time, and checks the traced Python memory peak. It is not an OS-level
+  container; native extensions and resources outside the patched Python APIs are not
+  isolated.
 - Ingestion adapters: CSV, JSON/JSONL, Parquet, and PostgreSQL.
 - Profiling and chunk merger: quality/info metrics with mergeable per-chunk state.
 - Transformation DSL: cleansing, casting, standardization, filtering, and imputation.
 - Loaders: atomic file writes and transactional PostgreSQL insert/upsert.
 - Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
-- State and lineage: local in-memory checkpoints; plans, approvals, hashes, logs, and
-  artifacts stored per run.
-- Agent workflow: source-only assessment, bounded clarification, validation, approval,
-  execution, retry, cancel.
+- State and lineage: local in-memory run checkpoints with plan, approval, hash, status, and
+  error state. Transform/execution logs and full artifact lineage are implemented with
+  MON-1.
+- Agent workflow: a plain application state machine, one instance per run. It bounds plan
+  intake/clarification, validation, approval, execution, retry, cancellation, and cleanup.
+  External effects are ports; run snapshots are saved after every transition.
 - Reports: escaped offline HTML summary from validated metrics.
 - API: run creation/status, approval, cancellation, logs, and health.
+
+## Run lifecycle
+
+- States: `created`, `awaiting_clarification`, `ready`, `awaiting_approval`, `running`,
+  `retrying`, `succeeded`, `failed`, `rejected`, `cancelled`, `timed_out`.
+- Terminal states: `succeeded`, `failed`, `rejected`, `cancelled`, `timed_out`.
+- A run stores its plan, plan hash, registry version, status, attempt count, approval state,
+  clarification attempts, questions/missing inputs, error, and timestamps.
+- Approval is required when the registry policy marks any operation as a write/destructive
+  action, or when the plan explicitly requests it. The workflow waits with a configurable
+  timeout; an approval timeout is a terminal `timed_out` state.
+- Retries are bounded and exponential; only errors marked `retryable` are retried.
+- Cancellation is checked before execution, between steps, after retry backoff, and while
+  waiting for approval. A running step is bounded by the sandbox timeout.
+- Cleanup runs on non-success terminal paths according to `AGENT_ETL_CLEANUP_POLICY`
+  (`cleanup` removes `artifacts/<run_id>`; `retain` keeps partial output).
+- The checkpoint port is process-local in v1; runs do not survive a restart.
 
 ## Data flow
 
@@ -70,8 +96,9 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 
 - `src/domain/` entities and contracts.
 - `src/application/` use cases, ports, validation policy, and registry policy.
-- `src/infrastructure/` PostgreSQL, file, LLM, local-memory checkpointer, Pydantic schema,
-  filesystem probe, plan sizer, registry bindings, sandbox, and logging adapters.
+- `src/infrastructure/` PostgreSQL, file, LLM, local-memory checkpointer, approval gateway,
+  cleanup, clock, deterministic plan intake, Pydantic schema, filesystem probe, plan
+  sizer/hasher, registry bindings, sandbox, and logging adapters.
 - `src/interfaces/` FastAPI routes and schemas.
 - `src/main.py` composition root.
 - `tests/` unit, integration, edge-case, and security tests.
@@ -86,7 +113,8 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - `application/` assesses sources, builds and validates plans, then calls `infrastructure/`
   adapters through ports.
 - `infrastructure/` reads/writes PostgreSQL and files, calls LLMs, checkpoints state, parses
-  JSON plans, measures serialized plan size, probes the workspace, and runs sandboxed steps.
+  JSON plans, measures serialized plan size, probes the workspace, and runs sandboxed steps
+  with workspace, network, time, and memory guards.
 - `domain/` holds shared entities and validates core invariants.
 - Plan validation and registry allowlists are application policy; Pydantic schemas,
   filesystem inspection, and concrete callables are infrastructure adapters.

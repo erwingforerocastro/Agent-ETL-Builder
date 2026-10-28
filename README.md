@@ -157,6 +157,46 @@ Validation checks are independent `PlanCheck` implementations assembled by
 `build_default_checks`; callers can inject a custom pipeline with
 `PlanValidator(..., checks=(...))`.
 
+## Sandbox execution
+
+`ExecutePlanUseCase` validates the plan before calling any step. `SandboxExecutor` then
+runs each allowlisted callable under a serialized guard:
+
+- file reads and writes are confined to the workspace; read-only runtime paths needed by
+  Python and pandas are allowed;
+- network connections and name resolution are denied by default;
+- wall-clock time is bounded, and the traced Python memory peak is checked;
+- the workspace is the execution working directory and the previous directory is restored.
+
+The guard is an in-process Python control, not an OS-level container. It does not isolate
+native extensions, CPU quotas, or code that bypasses the patched Python APIs; those remain
+deployment-level hardening items.
+
+## Run workflow
+
+`RunWorkflow` is a plain application state machine; persistence and external effects are
+injected ports. One instance handles one run and checkpoints every transition.
+
+- Plan intake goes through `PlanIntakePort`. A deterministic adapter is available for tests
+  and local development.
+- Validation and clarification are bounded to 3 attempts.
+- Approval is derived from registry policy, not trusted from the plan's own flag alone.
+  The default timeout is 300 seconds.
+- Execution retries at most twice with bounded exponential backoff; only retryable errors
+  are retried.
+- Cancellation is checked at approval, step, and retry boundaries.
+- Non-success terminal paths run cleanup according to `AGENT_ETL_CLEANUP_POLICY`
+  (`cleanup` or `retain`).
+
+Run state is process-local. It does not survive a restart in v1.
+
+Configuration:
+
+```text
+AGENT_ETL_APPROVAL_TIMEOUT_SECONDS=300
+AGENT_ETL_CLEANUP_POLICY=cleanup
+```
+
 ## Security baseline
 
 - Generated code is never executed. The interpreter runs only validated plans through
@@ -192,6 +232,7 @@ documents/
 
 ## Roadmap
 
-The next P0 backlog item is `EXE-1`: complete interpreter and sandbox enforcement, including
-timeout, memory, filesystem, and network limits with tests. Additional `TRN-0` transformation
-batches remain in progress.
+`EXE-1` and `WF-1` are complete: plans are validated before execution, the sandbox enforces
+workspace, network, timeout, and memory limits, and the workflow bounds clarification,
+approval, retries, cancellation, and cleanup. The next P0 backlog item is `API-1`: the
+FastAPI run contract. Additional `TRN-0` transformation batches remain in progress.

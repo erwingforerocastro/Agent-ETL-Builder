@@ -5,8 +5,16 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from domain.errors import IngestionError
+from domain.errors import IngestionError, SandboxError
 from infrastructure.ingestion.csv import read_csv
+
+
+def _raise_sandbox(*args: object, **kwargs: object) -> None:
+    raise SandboxError(
+        code="SANDBOX_PATH_DENIED",
+        message="denied",
+        module="test",
+    )
 
 
 def test_read_csv_returns_a_copy() -> None:
@@ -36,3 +44,12 @@ def test_read_csv_wraps_failures_without_leaking_os_details(tmp_path: Path) -> N
     assert caught.value.code == "INGESTION_FAILED"
     assert caught.value.message == "CSV ingestion failed"
     assert caught.value.context == {"path": str(path)}
+
+
+def test_read_csv_preserves_sandbox_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pd, "read_csv", _raise_sandbox)
+
+    with pytest.raises(SandboxError, match="denied"):
+        read_csv(path="input.csv")
