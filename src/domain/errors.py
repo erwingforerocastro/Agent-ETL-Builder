@@ -51,6 +51,10 @@ class LoadError(EtlError):
     """A destination could not be written."""
 
 
+class ProfilingError(EtlError):
+    """A source could not be profiled or its profile could not be merged."""
+
+
 class RegistryError(EtlError):
     """The module registry is invalid or a lookup failed."""
 
@@ -195,3 +199,27 @@ class RunApprovalError(WorkflowError):
             module=__name__,
             context={"error_type": error_type},
         )
+
+
+__all__ = [
+    "EtlError",
+    "IngestionError",
+    "LoadError",
+    "PlanValidationError",
+    "ProfilingError",
+    "RegistryError",
+    "RunAlreadyExistsError",
+    "RunApprovalError",
+    "RunApprovalRejectedError",
+    "RunApprovalTimeoutError",
+    "RunCancelledError",
+    "RunClarificationExhaustedError",
+    "RunExecutionError",
+    "RunIntakeError",
+    "RunInvalidStateError",
+    "RunNotFoundError",
+    "RunPlanStaleError",
+    "SandboxError",
+    "TransformationError",
+    "WorkflowError",
+]

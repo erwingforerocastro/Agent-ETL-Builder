@@ -3,13 +3,13 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, and API-1 complete.
-Five transformations are registered in the versioned allowlist, structured plans are validated
-before execution, and the bounded run workflow handles intake, approval, execution, retries,
-cancellation, and cleanup. The FastAPI run contract exposes the workflow with background
-execution. PostgreSQL connectivity and read-only ingestion adapters are available. The sandbox
-is an in-process guard; OS-level isolation remains deferred. Additional transformation batches
-remain in progress.
+**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, and API-1
+complete. Five transformations are registered in the versioned allowlist, structured plans are
+validated before execution, and the bounded run workflow handles intake, approval, execution,
+retries, cancellation, and cleanup. The FastAPI run contract exposes the workflow with
+background execution. PostgreSQL connectivity, read-only ingestion adapters, and mergeable
+quality profiling are available. The sandbox is an in-process guard; OS-level isolation remains
+deferred. Additional transformation batches remain in progress.
 
 ## Architecture
 
@@ -170,6 +170,48 @@ ASM-1. Making it a registry plan module requires the sandbox network policy to a
 configured database connections, which is not implemented yet. Raw SQL, `WHERE` clauses, and
 filter expressions are also not accepted yet.
 
+## Profiling and quality
+
+`ProfileSourceUseCase` consumes ordered chunks, writes one mergeable record per chunk, merges
+the records, and writes:
+
+| Artifact | Path |
+|---|---|
+| Quality metrics | `artifacts/<run_id>/<source_id>_<source_type>_quality.csv` |
+| Schema, statistics, and metadata | `artifacts/<run_id>/<source_id>_<source_type>_info.json` |
+| Per-chunk records | `artifacts/<run_id>/<source_id>_<source_type>_profile_chunk_<index>.json` |
+
+Quality metrics use explicit formulas:
+
+- column/row/dataset completeness = non-null and non-empty values / total values;
+- duplicate rows = distinct row fingerprints / total rows;
+- column uniqueness = distinct present values / present values;
+- declared rules: required, regex, range, domain, type, cross-column compare, and unique key;
+- accuracy = `N/A (formula not provided)`.
+
+The merge state is additive and exact where exactness is possible: row/null/empty counts,
+numeric count/sum/min/max, finite values for mean/median/multi-valued mode, date min/max/range,
+exact frequency maps, and row/key fingerprints. It never merges averages of averages or medians
+of medians. In the composition root, finite numeric values are written as sorted temporary
+Parquet files under the run folder and merged as a sorted stream; a standalone profiler
+constructed without a spill store keeps values in chunk state. Date statistics currently cover
+datetime-typed columns; date-like strings should be cast or covered by an explicit type rule.
+
+`ProfileRequest` carries the run/source identity, scope (`full` or `sample`), method, merge
+method, thresholds, rules, and limits. Bounded samples must set `scope=sample` and
+`approximate=true`; sampling itself is supplied by the assessment caller. `ProfileLimits`
+bounds distinct-value maps, row fingerprints, and frequency output. Any capped metric is
+marked approximate (`warn` unless it also fails its threshold). `ProfileThresholds` sets
+minimum acceptable ratios per quality family. Numeric mode frequency maps use the same
+distinct-value cap; a capped mode is omitted and marked approximate.
+
+Chunks are accepted only when their column names/order match and their inferred types are
+compatible. Numeric int/float drift and all-null chunks are merged; incompatible categorical,
+numeric, or naive/aware datetime mixes raise `PROFILE_SCHEMA_DRIFT`. Per-chunk records,
+temporary numeric spill files, and final artifacts live in the run folder and follow the
+cleanup policy. The deterministic HTML summary and optional narrative are not wired yet;
+PRF-1 provides the validated quality/info artifacts they will consume.
+
 ## Implemented transformations
 
 The first batch lives in `src/infrastructure/transformations/`. Each function returns a
@@ -323,7 +365,7 @@ Behavior notes:
   `/runs` requires `X-API-Key`; `/health` remains public.
 - Results expose status, output count, data availability, and sanitized step errors; raw
   DataFrames are not serialized into API responses. Assessment/draft-plan payloads and usage
-  metrics arrive with ASM-1/PRF-1/MON-1.
+  metrics arrive with ASM-1/MON-1.
 - Logs are process-local lifecycle events until MON-1 adds transform CSV and execution JSONL
   logging. Rate limiting remains a deployment-level control for production exposure.
 
@@ -333,7 +375,8 @@ Behavior notes:
   allowlisted registry functions.
 - Secrets belong in environment variables or a secret store and must be redacted from
   logs, errors, prompts, reports, and artifacts.
-- Source data and user context are untrusted; profiling artifacts are read-only.
+- Source data and user context are untrusted. Profiling never mutates the source, but its
+  quality/info/chunk artifacts can contain source values and must be protected like data.
 - API key authentication and request-size limits are available; rate limiting and production
   auth hardening are required before broad exposure.
 
@@ -347,10 +390,12 @@ src/
   domain/
   application/
     ports/
+    profiling/
     registry/
     use_cases/
     validation/
   infrastructure/
+    profiling/
   interfaces/
   main.py
   COMPONENTS.md
@@ -363,10 +408,11 @@ documents/
 
 ## Roadmap
 
-`EXE-1`, `WF-1`, `DB-1`, `ING-1`, and `API-1` are complete: plans are validated before
-execution, the sandbox enforces workspace, network, timeout, and memory limits, the workflow
-bounds clarification, approval, retries, cancellation, and cleanup, PostgreSQL sessions are
-parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL reads are chunked with
-stable identifiers, and the FastAPI run contract executes runs in the background. The next P1
-backlog item is `PRF-1` (profiling and chunk merge). Additional `TRN-0` transformation batches
-remain in progress.
+`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, and `API-1` are complete: plans are validated
+before execution, the sandbox enforces workspace, network, timeout, and memory limits, the
+workflow bounds clarification, approval, retries, cancellation, and cleanup, PostgreSQL
+sessions are parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL reads are
+chunked with stable identifiers, quality/info metrics merge from per-chunk state, and the
+FastAPI run contract executes runs in the background. The next P1 backlog item is `ASM-1`
+(source-only assessment and draft plan); `RPT-1` tracks the deterministic HTML summary.
+Additional `TRN-0` transformation batches remain in progress.

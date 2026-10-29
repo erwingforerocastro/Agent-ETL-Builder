@@ -44,6 +44,11 @@ Settings.from_env()
   +--> RegistryStepRunner(module_registry, sandbox)
   |       -> ExecutePlanUseCase(step_runner, plan_validator)
   |
+  +--> FilesystemProfileWriter(workspace / "artifacts")
+  +--> FilesystemNumericSpillStore(workspace / "artifacts")
+  +--> PandasChunkProfiler(numeric_spill)
+  |       -> ProfileSourceUseCase(profiler, profile_writer)
+  |
   +--> SystemClock()
   +--> InMemoryRunCheckpoint()
   +--> InMemoryApprovalGateway(clock)
@@ -78,7 +83,8 @@ A `RunWorkflow` instance is intentionally **not** shared between runs: it rememb
 `run_id` and routes one lifecycle. `RunManager` creates a fresh workflow, a fresh
 cancellation token, and a fresh intake adapter for each run, then schedules execution when
 the run becomes `ready`. `app.state.database` exposes the optional database adapter for
-later ingestion/loading wiring.
+later ingestion/loading wiring; `app.state.profile_source`, `app.state.profile_writer`, and
+`app.state.numeric_spill` expose profiling to the assessment branch.
 
 ## 3. Domain (`src/domain/`)
 
@@ -103,6 +109,21 @@ later ingestion/loading wiring.
 | `PlanRequest` | User-facing intake request (`run_id`, `thread_id`, message, mode, source, destination). |
 | `PlanIntakeResult` | Either a proposed plan or clarification questions/missing inputs/reason. |
 | `Run` | Immutable run snapshot. `Run.create` and `Run.transition` enforce the allowed state graph and field invariants. |
+
+### Profiling entities (`entities/profiling.py`)
+
+| Component | Purpose |
+|---|---|
+| `QualityRule` / `RuleKind` | Declared required, regex, range, domain, type, compare, or unique-key rules. |
+| `MetricResult` | One quality metric with family, scope, counts, value, threshold, status, formula, approximation flag, and details. |
+| `ChunkNumericState` / `ChunkDateState` | Mergeable finite-number and date state (counts, totals, boundaries, exact values or a spill reference). |
+| `ChunkColumnState` / `ChunkProfile` | Per-chunk null/empty, numeric, date, frequency, row-fingerprint, and rule state. |
+| `ColumnStatistics` / `NumericStatistics` / `DateTimeStatistics` / `CategoricalStatistics` | Final info-file statistics, including multi-valued mode and null/empty categories. |
+| `ProfileReport` | Merged source profile: identity, scope/method, merge method, columns, metrics, warnings, and hashes. |
+| `ProfileWarning` | Sanitized non-fatal issue such as a capped map or failed column. |
+
+`ProfileReport.to_info_dict()` is the versioned info-file contract. Accuracy is a
+`not_applicable` metric with value `None`, rendered as `N/A`.
 
 ### Registry entities (`entities/registry.py`)
 
@@ -157,6 +178,8 @@ last column.
 | `BackgroundSchedulerPort` | Submit run work outside the request thread. | `ThreadPoolRunScheduler` |
 | `DatabasePort` | Open a transaction-scoped read-only or writable session. | `PostgresDatabase` |
 | `DatabaseSessionPort` | Parameterized fetch/execute/execute-many plus server-side batch iteration. | `PostgresSession` |
+| `ChunkProfilerPort` | Profile one opaque chunk and merge chunk records into a report. | `PandasChunkProfiler` |
+| `ProfileArtifactWriterPort` | Persist per-chunk records, quality CSV, and info JSON. | `FilesystemProfileWriter` |
 
 ## 5. Plan validation (`src/application/validation/`)
 
@@ -400,6 +423,9 @@ cleanup. Those are deployment-level hardening items.
 | `ingestion/postgresql.py` | `PostgresSourceReader`: read-only, identifier-validated table reads and server-side batches. |
 | `ingestion/identifiers.py` | Stable source ids, content/schema hashes, canonical paths, and artifact names. |
 | `ingestion/chunking.py` | Deterministic in-memory chunk iteration. |
+| `profiling/pandas_profiler.py` | `PandasChunkProfiler`: per-chunk mergeable state, rule evaluation, exact statistical merge, capped maps, metrics. |
+| `profiling/spill.py` | `FilesystemNumericSpillStore`: sorted temporary Parquet values and bounded streaming reads for exact numeric merges. |
+| `profiling/artifacts.py` | Atomic per-chunk JSON, quality CSV, and info JSON writer with path/formula-injection guards. |
 | `loaders/csv.py` | CSV destination adapter. |
 
 ### PostgreSQL sessions (`infrastructure/database/`)
@@ -457,6 +483,50 @@ ChunkManifest
 because registry execution runs under a sandbox that denies network access. JSON arrays are
 materialized before chunking; use JSONL for large line-delimited files.
 
+### Profiling (`application/use_cases/profile_source.py`, `infrastructure/profiling/`)
+
+```text
+ProfileSourceUseCase.execute(chunks, request)
+  |
+  +-> for each chunk (index 0..n-1)
+  |     -> ChunkProfilerPort.profile_chunk(chunk)
+  |     -> NumericSpillPort.write(sorted finite values) when configured
+  |     -> ProfileArtifactWriterPort.write_chunk(record)
+  |
+  +-> ChunkProfilerPort.merge(records)
+  |     -> validate sequential indexes, schema compatibility, rule state
+  |     -> add counts; merge numeric totals and date boundaries
+  |     -> stream spilled values (or in-memory values) for exact median/mode
+  |     -> merge frequency maps, row/key fingerprints
+  |     -> build quality metrics and warnings
+  |
+  +-> ProfileArtifactWriterPort.write_report(report)
+        -> artifacts/<run_id>/<source_id>_<source_type>_quality.csv
+        -> artifacts/<run_id>/<source_id>_<source_type>_info.json
+```
+
+- Completeness counts non-null, non-empty values per column and row. Uniqueness uses distinct
+  row fingerprints and distinct present values; declared key rules merge key fingerprints.
+- Declared rules produce consistency/validity metrics. Without rules, those families and
+  accuracy are `not_applicable`; accuracy is always `N/A`.
+- Numeric state stores count/sum/min/max and exact finite values so the merged mean, median,
+  and multi-valued mode are not derived from per-chunk medians. Date state stores
+  min/max/range and normalizes timezone-aware values to UTC.
+- Categorical frequency tables include null and empty markers. `ProfileLimits` caps
+  distinct/frequency maps and row/key fingerprints; capped metrics have `approximate=true`
+  and normally become `warn`.
+- Chunk schema must be compatible. Numeric int/float drift and all-null chunks are merged;
+  incompatible category/numeric/date kinds or naive/aware datetime mixes raise
+  `PROFILE_SCHEMA_DRIFT`.
+- The writer validates run/source identifiers against path traversal, Windows reserved names,
+  and trailing dots; writes are atomic; CSV text cells are neutralized against formula
+  injection.
+- In the composition root, `PandasChunkProfiler` uses `FilesystemNumericSpillStore` to write
+  sorted per-chunk numeric values to temporary Parquet files and merge them as a sorted stream.
+  A profiler constructed without a spill store keeps values in chunk state. Numeric mode maps
+  are capped and marked approximate. The deterministic HTML summary and optional narrative are
+  not wired yet.
+
 ## 10. Interfaces (`src/interfaces/api/`)
 
 | Component | Purpose |
@@ -497,6 +567,19 @@ caller
        -> RegistryStepRunner.run_transformation(...) for each step
        -> RegistryStepRunner.run_destination(...)
        -> PlanExecutionResult
+```
+
+### Profile a source
+
+```text
+caller (assessment branch)
+  -> source chunk iterator
+  -> ProfileSourceUseCase.execute(chunks, ProfileRequest)
+       -> PandasChunkProfiler.profile_chunk(...) per chunk
+       -> FilesystemProfileWriter.write_chunk(...) per chunk
+       -> PandasChunkProfiler.merge(...)
+       -> FilesystemProfileWriter.write_report(...)
+  -> ProfileOutcome(report, quality/info/chunk paths)
 ```
 
 ### Run the bounded workflow
@@ -571,6 +654,10 @@ GET /runs/{id}/logs
   `iter_*_chunks` streaming, register the callable in `infrastructure/registry/bindings.py`,
   and add a `ModuleSpec` with the right path constraint and supported dialect. Compute stable
   identity through `infrastructure/ingestion/identifiers.py`.
+- **Add a profiling rule or statistic:** add domain types/invariants, update the explicit
+  formula in `application/profiling/definitions.py`, implement mergeable chunk state in
+  `PandasChunkProfiler`, and render it in `ProfileReport.to_info_dict`/the quality writer.
+  Never derive a final statistic from per-chunk averages or medians.
 - **Replace plan intake:** implement `PlanIntakePort` and `PlanIntakeFactoryPort`, then wire
   the factory into `RunManager`.
 - **Replace plan parsing:** implement `PlanParserPort` (for example a different schema
