@@ -1,6 +1,6 @@
 # Agent ETL Builder - Backlog (v2 candidates)
 
-Version: 2.2-draft
+Version: 2.3-draft
 Status: Deferred work; not part of v1 acceptance
 Last updated: 2026-10-29
 
@@ -32,6 +32,8 @@ them.
 | TRN-4 | P2 | Multi-column imputation and directional fill | v1 imputes one column with constant/mean/median/mode. Multi-column policies, forward/backward fill, and interpolation need chunk-state rules. | TRN-0, TRN-1 |
 | TRN-5 | P2 | Explicit date input formats and timezone policy | v1 parses with pandas `format="mixed"` and formats to text. Ambiguous formats, mixed timezones, and timezone conversion need an explicit contract. | TRN-0, TRN-1 |
 | TRN-6 | P2 | Column projection, rename, and drop | v1 has no column selection/rename/drop modules; these need destructive-operation classification and collision rules. | TRN-0, TRN-1 |
+| TRN-7 | P2 | Plan-time schema-aware validation | Plan validation cannot inspect the source schema. Column existence, dtype compatibility, and all-null behavior are checked during execution. A source schema contract or bounded dry run is needed for early validation. | TRN-1, ING-1 |
+| TRN-8 | P2 | Explicit operation-kind metadata | v1 infers source/transformation/destination roles from required pipeline inputs and declared side effects. Explicit read/transform/write kinds are safer for unusual module signatures. | TRN-1, REG-1 |
 | ST-2 | P1 | Persistent checkpoints and crash resume | v1 uses process-local memory only. | ST-1 |
 | DB-2 | P1 | Configured-connection sandbox policy | PostgreSQL reads exist but cannot be selected by validated plans because registry execution denies network access. | DB-1, EXE-1 |
 | API-2 | P2 | Retention, rate limiting, stronger auth | v1 exposes optional API-key protection and process-local logs. | API-1 |
@@ -67,6 +69,8 @@ The v1 transformation batch deliberately stays single-column and literal:
 - Explicit date input formats, ambiguous formats, and mixed-timezone normalization.
 - Column projection, rename, and drop modules.
 - Filters that target multiple columns in one step; use multiple steps.
+- Plan-time validation against the source schema; v1 checks columns and dtypes at execution.
+- Explicit operation-kind metadata; v1 infers roles from pipeline inputs and side effects.
 
 ## Deferred profiling edge cases
 

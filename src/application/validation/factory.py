@@ -9,6 +9,7 @@ from application.validation.approval_validator import ApprovalValidator
 from application.validation.argument_validator import ArgumentValidator
 from application.validation.errors import PlanValidationErrorFactory
 from application.validation.limits_validator import LimitsValidator
+from application.validation.operation_role_validator import OperationRoleValidator
 from application.validation.operations import OperationCatalog, OperationSafetyPolicy
 from application.validation.path_validator import PathValueValidator, PlanPathValidator
 from application.validation.plan_validation_check import PlanValidationCheck
@@ -16,6 +17,9 @@ from application.validation.registry_entry_validator import RegistryEntryValidat
 from application.validation.schema_validator import SchemaValidator
 from application.validation.security_validator import SecurityValidator
 from application.validation.settings import PlanValidationSettings
+from application.validation.transformation_contract_validator import (
+    TransformationContractValidator,
+)
 
 
 def build_default_checks(
@@ -33,7 +37,9 @@ def build_default_checks(
     return (
         SchemaValidator(factory),
         RegistryEntryValidator(catalog, safety, factory),
+        OperationRoleValidator(catalog, factory),
         ArgumentValidator(catalog, path_value_validator, factory),
+        TransformationContractValidator(catalog, factory),
         PlanPathValidator(catalog, path_value_validator),
         LimitsValidator(settings, sizer, factory),
         SecurityValidator(settings, factory),

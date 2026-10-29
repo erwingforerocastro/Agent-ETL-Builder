@@ -1,7 +1,7 @@
 # Agent ETL Builder - Architecture
 
-Version: 1.8
-Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, ASM-1, API-1, and TRN-0 implemented; TRN-1 next
+Version: 1.9
+Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, ASM-1, API-1, TRN-0, and TRN-1 implemented; LOD-1 next
 Last updated: 2026-10-29
 Scope: Module organization and runtime boundaries.
 
@@ -29,9 +29,10 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - Module registry: approved functions, versions, inputs, typed constraints, outputs, side
   effects, and examples. The allowlist policy lives in `application/registry`; concrete
   callables are bound in `infrastructure/registry/bindings.py`.
-- Plan builder/validator: schema, allowlist, arguments, paths, limits, security, approval.
-  Policy checks live in `application/validation`; Pydantic parsing, plan size measurement,
-  and filesystem probing are infrastructure adapters.
+- Plan builder/validator: schema, allowlist, operation roles, arguments, transformation
+  contract, paths, limits, security, and approval. Policy checks live in
+  `application/validation`; Pydantic parsing, plan size measurement, and filesystem probing
+  are infrastructure adapters.
 - Source assessor: `AssessSourceUseCase` resolves a workspace file through a reader port,
   profiles the full source through `ProfileSourceUseCase`, and derives issues, assumptions,
   selected metrics, missing inputs, and a conservative draft plan. It runs under the sandbox
@@ -68,9 +69,11 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   filesystem adapters. Completeness, uniqueness, numeric/date/categorical statistics are
   explicit; consistency/validity rules, sampling, spill, and reports are v2 work. Accuracy is
   always `N/A`. Capped maps are marked approximate.
-- Transformation DSL: cleansing, casting, standardization, filtering, and imputation.
-  v1 implements ten allowlisted transformation modules; higher-level composition remains
-  TRN-1 work.
+- Transformation DSL: the ordered plan step list is the v1 DSL. Ten allowlisted modules cover
+  cleansing, casting, standardization, filtering, and imputation. Validation enforces operation
+  roles, unique step IDs, idempotence, no transformation side effects, and cross-parameter
+  semantics before execution. Source schema existence and dtype compatibility are still checked
+  at execution time because the source schema is not part of the plan.
 - Loaders: atomic file writes and transactional PostgreSQL insert/upsert.
 - Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
 - State and lineage: local in-memory run checkpoints with plan, assessment, approval, hash,

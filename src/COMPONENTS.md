@@ -205,13 +205,15 @@ by `PlanValidator`. Each check implements `PlanValidationCheck`.
 ```text
 ExecutionPlan
   |
-  +-> SchemaValidator          version, mode, operation names, step ids, on_error
-  +-> RegistryEntryValidator   allowlist lookup, assessment must be read-only
-  +-> ArgumentValidator        unknown/missing/pipeline args, types, constraints
-  +-> PlanPathValidator        path-like arguments anywhere in params
-  +-> LimitsValidator          step count, chunk size, serialized size
-  +-> SecurityValidator        code syntax, raw SQL, secrets, unsafe shapes
-  +-> ApprovalValidator        approval required for writes/destructive actions
+  +-> SchemaValidator              version, mode, operation names, step ids, on_error
+  +-> RegistryEntryValidator       allowlist lookup, assessment must be read-only
+  +-> OperationRoleValidator       source reads, transformation consumes data, destination writes
+  +-> ArgumentValidator            unknown/missing/pipeline args, types, constraints
+  +-> TransformationContractValidator  idempotence and cross-parameter semantics
+  +-> PlanPathValidator            path-like arguments anywhere in params
+  +-> LimitsValidator              step count, chunk size, serialized size
+  +-> SecurityValidator            code syntax, raw SQL, secrets, unsafe shapes
+  +-> ApprovalValidator            approval required for writes/destructive actions
   |
   v
 PlanValidationError with stable code and sanitized context
@@ -225,6 +227,8 @@ Key collaborators:
 | `PlanValidationCheck` | Protocol for one validation pass. Custom pipelines can be injected. |
 | `OperationCatalog` | Registry lookup with plan-validation errors for unknown operations. |
 | `OperationSafetyPolicy` | Classifies writes/destructive operations and derives approval requirements. |
+| `OperationRoleValidator` | Enforces read source, DataFrame-consuming transformation, and write destination slots. |
+| `TransformationContractValidator` | Enforces idempotence and cross-parameter rules for filter, imputation, and date steps. |
 | `iter_operations` / `OperationCall` | Uniform traversal of source, transformations, and destination. |
 | `PathValueValidator` | Shape, relative-path, Windows-reserved, workspace, symlink, and length checks. |
 | `ArgumentValidator` | Dispatch table from `ConstraintKind` to focused constraint checkers. |
@@ -475,8 +479,9 @@ The transformation adapters are copy-on-write, deterministic, and raise structur
 `TransformationError` values. The current set is `drop_duplicate_rows`, `drop_empty_rows`,
 `trim_whitespace`, `standardize_column_names`, `cast_column`, `filter_rows`,
 `fill_missing_values`, `normalize_dates`, `change_text_case`, and `replace_values`.
-`filter_rows`, coercing date normalization, and nulling replacement are destructive and
-require approval.
+Every transformation must consume the pipeline DataFrame, be idempotent, and declare no side
+effects. `filter_rows`, coercing date normalization, and nulling replacement are destructive
+and require approval.
 
 ### PostgreSQL sessions (`infrastructure/database/`)
 
@@ -721,8 +726,10 @@ GET /runs/{id}/logs
 
 ## 12. Extension points
 
-- **Add a transformation:** implement a deterministic pandas function, add a `ModuleSpec` in
-  `application/registry/specs.py`, and bind it in `infrastructure/registry/bindings.py`.
+- **Add a transformation:** implement a deterministic, idempotent pandas function, add a
+  `ModuleSpec` in `application/registry/specs.py`, bind it in
+  `infrastructure/registry/bindings.py`, and add a case to
+  `tests/unit/transformations/test_dsl_contract.py`.
 - **Add a validation rule:** implement `PlanValidationCheck`, add it to
   `build_default_checks`, and add tests for its stable error code.
 - **Replace persistence:** implement `RunCheckpointPort` (for example PostgreSQL) and wire it

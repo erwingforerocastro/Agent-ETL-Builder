@@ -1,9 +1,9 @@
 # Agent ETL Builder - Research / Ground Truth
 
-Version: 1.1
+Version: 1.2
 Last verified: 2026-10-29
-Verified code commit: `f0530a1` (TRN-0 batch two; local `main`)
-Verified baseline: 578 passed, 3 skipped, 90.42% coverage; ruff, format, mypy, lock, and sync clean.
+Verified code commit: `f0530a1` plus the TRN-1 batch (local `main`)
+Verified baseline: 625 passed, 3 skipped, 90.62% coverage; ruff, format, mypy, lock, and sync clean.
 
 Purpose: explain how the project actually works today, not how it is planned to work.
 Code and passing tests are authoritative. Planning documents may describe intended behavior.
@@ -36,8 +36,8 @@ source only     -> assess  -> confirm destination -> validate -> approval? -> ex
 Delivery status from `documents/backlog.txt`:
 
 - Done: DOC-1, FND-1, ST-1, DB-1, REG-1, PLN-1, EXE-1, WF-1, ING-1, PRF-1, ASM-1,
-  API-1, TRN-0.
-- Pending: TRN-1, LOD-1, MON-1, TST-1.
+  API-1, TRN-0, TRN-1.
+- Pending: LOD-1, MON-1, TST-1.
 
 ## 2. Runtime in one picture
 
@@ -174,14 +174,20 @@ no spec. There are no database modules in the allowlist.
 
 1. `SchemaValidator` - plan shape, mode, unique step ids, operation syntax.
 2. `RegistryEntryValidator` - every operation is allowlisted; assessment plans are read-only.
-3. `ArgumentValidator` - argument names, required values, types, constraints.
-4. `PlanPathValidator` - path shape and workspace confinement.
-5. `LimitsValidator` - step count, chunk size, serialized plan size.
-6. `SecurityValidator` - no code/raw SQL, credentials, NaN/infinity, excessive depth/strings.
-7. `ApprovalValidator` - write/destructive plans must set `approval_required: true`;
+3. `OperationRoleValidator` - sources are read-only and do not require a pipeline DataFrame;
+   transformations require one and have no declared side effects; destinations write.
+4. `ArgumentValidator` - argument names, required values, types, constraints.
+5. `TransformationContractValidator` - transformation operations must be idempotent; filter,
+   imputation, and date steps enforce cross-parameter rules.
+6. `PlanPathValidator` - path shape and workspace confinement.
+7. `LimitsValidator` - step count, chunk size, serialized plan size.
+8. `SecurityValidator` - no code/raw SQL, credentials, NaN/infinity, excessive depth/strings.
+9. `ApprovalValidator` - write/destructive plans must set `approval_required: true`;
    assessment plans may not contain them.
 
-Confirmation validates the generated plan again. Execution validates again before running.
+Role and transformation-contract failures use `PLAN_INVALID_OPERATION_ROLE`,
+`PLAN_NON_IDEMPOTENT_TRANSFORMATION`, or `PLAN_INVALID_ARGUMENT`. Confirmation validates the
+generated plan again. Execution validates again before running.
 
 ## 7. Run lifecycle
 
@@ -289,9 +295,14 @@ Planning and API:
 
 Execution and data:
 
-- Ten transformation modules exist. The plan step list is the only transformation DSL; there
-  are no multi-condition/OR filters, regex replacements, multi-column imputation steps,
-  explicit date input formats, or mixed-timezone normalization yet.
+- Ten transformation modules exist. The ordered plan step list is the v1 transformation DSL;
+  plan validation enforces operation roles, idempotence, no transformation side effects, and
+  cross-parameter rules. There are no multi-condition/OR filters, regex replacements,
+  multi-column imputation steps, explicit date input formats, or mixed-timezone normalization
+  yet.
+- Plan validation cannot inspect the source schema. Column existence, dtype compatibility, and
+  all-null behavior are checked by transformation modules during execution. Plan-time
+  schema-aware validation is deferred as `TRN-7`.
 - `save_csv` is the only destination and is not atomic.
 - `filter_rows`, `normalize_dates` with `errors="coerce"`, and `replace_values` with
   `new=null` are classified as destructive and require approval; assessment plans reject them.
@@ -333,12 +344,12 @@ uv lock --check
 uv sync --check
 ```
 
-Last result on 2026-10-29 at commit `f0530a1`:
+Last result on 2026-10-29 at commit `f0530a1` plus the TRN-1 batch:
 
-- `pytest`: 578 passed, 3 skipped, 13.94 s, coverage 90.42% (required 80%).
+- `pytest`: 625 passed, 3 skipped, 14.62 s, coverage 90.62% (required 80%).
 - `ruff check`: clean.
-- `ruff format --check`: 208 files already formatted.
-- `mypy`: no issues in 207 source files.
+- `ruff format --check`: 213 files already formatted.
+- `mypy`: no issues in 212 source files.
 - `uv lock --check` / `uv sync --check`: up to date, no changes.
 - Skips: one PostgreSQL TLS test because the temporary cluster had TLS enabled; two symlink
   tests because symlinks are unavailable on the Windows runner.

@@ -3,14 +3,14 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, ASM-1, API-1, and
-TRN-0 complete. Ten transformations are registered in the versioned allowlist, structured
+**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, ASM-1, API-1, TRN-0,
+and TRN-1 complete. Ten transformations are registered in the versioned allowlist, structured
 plans are validated before execution, and the bounded run workflow handles intake, approval,
 execution, retries, cancellation, and cleanup. The FastAPI run contract exposes the workflow
 with background execution. Source-only requests run a read-only assessment, return a draft
 plan, and confirm into a validated pipeline plan. PostgreSQL connectivity, read-only ingestion
 adapters, and core quality profiling are available. The sandbox is an in-process guard;
-OS-level isolation remains deferred. Transformation DSL work remains in progress.
+OS-level isolation remains deferred. The next v1 items are LOD-1, MON-1, and TST-1.
 
 ## Architecture
 
@@ -251,8 +251,12 @@ returns a new DataFrame, validates its columns, preserves the input, and raises
 These modules are registered in registry version `1.0.0`. The allowlist policy lives in
 `src/application/registry/specs.py`, concrete pandas callables are bound in
 `src/infrastructure/registry/bindings.py`, and metadata is exposed through
-`src/application/ports/module_registry.py`. Filtering, coercing date normalization, and
-nulling replacement require approval because they can remove or destroy values.
+`src/application/ports/module_registry.py`.
+
+The transformation step list is the v1 DSL. Validation enforces operation roles, unique step
+IDs, idempotence, and cross-parameter rules before execution. Filtering, coercing date
+normalization, and nulling replacement require approval because they can remove or destroy
+values.
 
 ## Module registry
 
@@ -276,12 +280,19 @@ translates JSON into domain entities, while the policy checks live in
 
 1. schema, mode, and step identifiers;
 2. registry allowlist and assessment read-only rules;
-3. required, optional, unknown, and pipeline-managed arguments, including types and enums;
-4. workspace-confined paths (traversal, absolute paths, symlinks, Windows reserved names,
+3. operation roles: sources read, transformations consume the pipeline DataFrame, and
+   destinations write;
+4. required, optional, unknown, and pipeline-managed arguments, including types and enums;
+5. transformation contract: idempotence and cross-parameter rules for filtering,
+   imputation, and date normalization;
+6. workspace-confined paths (traversal, absolute paths, symlinks, Windows reserved names,
    control characters, and overlong paths);
-5. step count, chunk size, and serialized plan size;
-6. unsafe code, raw SQL, and embedded credentials;
-7. approval for writes, DDL, destructive transformations, and secret-bearing operations.
+7. step count, chunk size, and serialized plan size;
+8. unsafe code, raw SQL, and embedded credentials;
+9. approval for writes, DDL, destructive transformations, and secret-bearing operations.
+
+Plan validation cannot inspect the source schema: column existence, dtype compatibility, and
+all-null behavior are checked by the transformation modules during execution.
 
 `src/application/validation/plan_validator.py` validates domain plans and has no Pydantic
 or filesystem dependency. `src/infrastructure/validation/plan_validator.py` is the
@@ -435,12 +446,13 @@ documents/
 
 ## Roadmap
 
-`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, `ASM-1`, `API-1`, and `TRN-0` are complete: plans
-are validated before execution, the sandbox enforces workspace, network, timeout, and memory
+`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, `ASM-1`, `API-1`, `TRN-0`, and `TRN-1` are complete:
+plans are validated before execution, operation roles are enforced, transformation semantics
+and idempotence are checked, the sandbox enforces workspace, network, timeout, and memory
 limits, the workflow bounds clarification, approval, retries, cancellation, and cleanup,
 PostgreSQL sessions are parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL
 reads are chunked with stable identifiers, core quality/info metrics merge from per-chunk
 state, source-only requests assess and confirm into validated pipeline plans, and the FastAPI
-run contract executes runs in the background. The next v1 items are `TRN-1`, `LOD-1`, `MON-1`,
-and `TST-1`. Advanced profiling, sampling, reporting, and future adapters are tracked in
+run contract executes runs in the background. The next v1 items are `LOD-1`, `MON-1`, and
+`TST-1`. Advanced profiling, sampling, reporting, and future adapters are tracked in
 `documents/backlog_v2.txt`.

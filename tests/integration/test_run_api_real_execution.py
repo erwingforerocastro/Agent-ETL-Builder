@@ -192,6 +192,18 @@ def _multi_transform_payload(run_id: str) -> dict[str, object]:
     }
 
 
+def _invalid_filter_payload(run_id: str) -> dict[str, object]:
+    payload = _pipeline_payload(run_id)
+    payload["transformations"] = [
+        {
+            "step_id": "s1",
+            "operation": "filter_rows",
+            "params": {"column": "status", "operator": "is_null", "value": "x"},
+        }
+    ]
+    return payload
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
@@ -293,3 +305,21 @@ async def test_pipeline_executes_every_transformation_category(tmp_path: Path) -
     assert output["created_at"].tolist() == ["2026-01-02", "2026-12-31"]
     assert pd.isna(output["status"].iloc[0])
     assert output["status"].iloc[1] == "active"
+
+
+@pytest.mark.anyio
+async def test_api_rejects_invalid_transformation_semantics(tmp_path: Path) -> None:
+    app, scheduler = _build_app(tmp_path)
+
+    response = await _request(
+        app,
+        "POST",
+        "/runs",
+        json={"message": "Invalid filter", "plan": _invalid_filter_payload("run-invalid-1")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "PLAN_INVALID_ARGUMENT"
+    assert scheduler.tasks == []
+    missing = await _request(app, "GET", "/runs/run-invalid-1")
+    assert missing.status_code == 404

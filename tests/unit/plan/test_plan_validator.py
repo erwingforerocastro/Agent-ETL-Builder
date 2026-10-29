@@ -1,6 +1,7 @@
 """Unit tests for plan validation."""
 
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -186,6 +187,42 @@ def test_valid_pipeline_passes(tmp_path: Path) -> None:
     _validator(tmp_path).validate(plan)
 
 
+def test_source_must_be_read_only_and_not_require_pipeline_input(tmp_path: Path) -> None:
+    write_source = make_plan(source=PlanSource(operation="save_csv", params={"path": "output.csv"}))
+    pipeline_source = make_plan(
+        source=PlanSource(operation="trim_whitespace", params={"columns": ["name"]})
+    )
+
+    _assert_code(write_source, "PLAN_INVALID_OPERATION_ROLE", workspace=tmp_path)
+    _assert_code(pipeline_source, "PLAN_INVALID_OPERATION_ROLE", workspace=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("operation", "params"),
+    [
+        ("read_csv", {"path": "input.csv"}),
+        ("read_json", {"path": "input.json"}),
+        ("save_csv", {"path": "output.csv"}),
+    ],
+)
+def test_transformation_must_consume_pipeline_input_and_not_write(
+    tmp_path: Path,
+    operation: str,
+    params: dict[str, object],
+) -> None:
+    plan = make_plan(
+        transformations=(PlanTransformation(step_id="s1", operation=operation, params=params),)
+    )
+
+    _assert_code(plan, "PLAN_INVALID_OPERATION_ROLE", workspace=tmp_path)
+
+
+def test_destination_must_be_a_write_operation(tmp_path: Path) -> None:
+    plan = make_plan(destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}))
+
+    _assert_code(plan, "PLAN_INVALID_OPERATION_ROLE", workspace=tmp_path)
+
+
 def test_valid_payload_is_parsed_and_validated(tmp_path: Path) -> None:
     payload: dict[str, object] = {
         "plan_version": "1.0",
@@ -344,6 +381,151 @@ def test_multi_union_argument_rejects_undeclared_types(tmp_path: Path) -> None:
     )
 
     _assert_code(plan, "PLAN_INVALID_ARGUMENT_TYPE", workspace=tmp_path)
+
+
+def test_filter_null_operator_rejects_a_value(tmp_path: Path) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="filter_rows",
+                params={"column": "status", "operator": "is_null", "value": "x"},
+            ),
+        )
+    )
+
+    _assert_code(plan, "PLAN_INVALID_ARGUMENT", workspace=tmp_path)
+
+
+def test_filter_comparison_requires_a_value(tmp_path: Path) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="filter_rows",
+                params={"column": "status", "operator": "equals"},
+            ),
+        )
+    )
+
+    _assert_code(plan, "PLAN_INVALID_ARGUMENT", workspace=tmp_path)
+
+
+def test_filter_text_operator_requires_a_string_value(tmp_path: Path) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="filter_rows",
+                params={"column": "status", "operator": "contains", "value": 1},
+            ),
+        )
+    )
+
+    _assert_code(plan, "PLAN_INVALID_ARGUMENT", workspace=tmp_path)
+
+
+def test_constant_imputation_requires_a_value(tmp_path: Path) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="fill_missing_values",
+                params={"column": "amount", "method": "constant"},
+            ),
+        )
+    )
+
+    _assert_code(plan, "PLAN_INVALID_ARGUMENT", workspace=tmp_path)
+
+
+def test_summary_imputation_rejects_a_value(tmp_path: Path) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="fill_missing_values",
+                params={"column": "amount", "method": "mean", "value": 0},
+            ),
+        )
+    )
+
+    _assert_code(plan, "PLAN_INVALID_ARGUMENT", workspace=tmp_path)
+
+
+def test_date_output_format_must_not_be_blank(tmp_path: Path) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="normalize_dates",
+                params={"column": "created_at", "output_format": "   "},
+            ),
+        )
+    )
+
+    _assert_code(plan, "PLAN_INVALID_ARGUMENT", workspace=tmp_path)
+
+
+def test_valid_transformation_semantics_pass(tmp_path: Path) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="filter_rows",
+                params={"column": "status", "operator": "is_not_null"},
+            ),
+            PlanTransformation(
+                step_id="s2",
+                operation="fill_missing_values",
+                params={"column": "amount", "method": "constant", "value": 0},
+            ),
+            PlanTransformation(
+                step_id="s3",
+                operation="normalize_dates",
+                params={"column": "created_at", "output_format": "%Y-%m-%d"},
+            ),
+        )
+    )
+
+    _validator(tmp_path).validate(plan)
+
+
+def test_non_idempotent_transformation_is_rejected(tmp_path: Path) -> None:
+    real_registry = build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
+    modules = {module.name: module for module in real_registry.snapshot().modules}
+    fake = _fake_module(
+        "fake_transform",
+        (ModuleInput(name="df", type="DataFrame", required=True, pipeline_input=True),),
+    )
+    fake = replace(fake, idempotent=False)
+    registry = cast(
+        ModuleRegistryReadPort,
+        _StubRegistry(
+            (
+                modules["read_csv"],
+                fake,
+                modules["save_csv"],
+            )
+        ),
+    )
+    validator = PlanValidator(
+        registry,
+        workspace=FilesystemWorkspaceProbe(tmp_path),
+        sizer=CanonicalPlanSizer(),
+    )
+    plan = make_plan(
+        transformations=(PlanTransformation(step_id="s1", operation="fake_transform", params={}),)
+    )
+
+    with pytest.raises(PlanValidationError) as caught:
+        validator.validate(plan)
+
+    assert caught.value.code == "PLAN_NON_IDEMPOTENT_TRANSFORMATION"
+    assert caught.value.context == {
+        "step": "transformation[s1]",
+        "operation": "fake_transform",
+    }
 
 
 def test_empty_optional_argument_is_rejected(tmp_path: Path) -> None:
@@ -563,7 +745,6 @@ def test_write_without_approval_is_rejected(tmp_path: Path) -> None:
 
 def test_destructive_transformation_without_approval_is_rejected(tmp_path: Path) -> None:
     plan = make_plan(
-        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
         transformations=(
             PlanTransformation(
                 step_id="s1",
@@ -579,7 +760,6 @@ def test_destructive_transformation_without_approval_is_rejected(tmp_path: Path)
 
 def test_coercing_cast_without_approval_is_rejected(tmp_path: Path) -> None:
     plan = make_plan(
-        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
         transformations=(
             PlanTransformation(
                 step_id="s1",
@@ -595,7 +775,6 @@ def test_coercing_cast_without_approval_is_rejected(tmp_path: Path) -> None:
 
 def test_filter_rows_without_approval_is_rejected(tmp_path: Path) -> None:
     plan = make_plan(
-        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
         transformations=(
             PlanTransformation(
                 step_id="s1",
@@ -611,7 +790,6 @@ def test_filter_rows_without_approval_is_rejected(tmp_path: Path) -> None:
 
 def test_coercing_date_normalization_without_approval_is_rejected(tmp_path: Path) -> None:
     plan = make_plan(
-        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
         transformations=(
             PlanTransformation(
                 step_id="s1",
@@ -631,7 +809,6 @@ def test_coercing_date_normalization_without_approval_is_rejected(tmp_path: Path
 
 def test_null_replacement_without_approval_is_rejected(tmp_path: Path) -> None:
     plan = make_plan(
-        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
         transformations=(
             PlanTransformation(
                 step_id="s1",
@@ -648,8 +825,7 @@ def test_null_replacement_without_approval_is_rejected(tmp_path: Path) -> None:
 def test_non_destructive_new_transform_variants_without_approval_pass(
     tmp_path: Path,
 ) -> None:
-    plan = make_plan(
-        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
+    plan = make_assessment_plan(
         transformations=(
             PlanTransformation(
                 step_id="s1",
@@ -661,18 +837,14 @@ def test_non_destructive_new_transform_variants_without_approval_pass(
                 operation="replace_values",
                 params={"columns": ["status"], "old": "N/A", "new": "unknown"},
             ),
-        ),
-        approval_required=False,
+        )
     )
 
     _validator(tmp_path).validate(plan)
 
 
 def test_read_only_plan_without_approval_passes(tmp_path: Path) -> None:
-    plan = make_plan(
-        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
-        approval_required=False,
-    )
+    plan = make_assessment_plan()
 
     _validator(tmp_path).validate(plan)
 

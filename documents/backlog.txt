@@ -1,8 +1,8 @@
 # Agent ETL Builder - Backlog (v1)
 
-Version: 1.7
+Version: 1.8
 Scope: v1 delivery only
-Status: TRN-0 complete; TRN-1 next
+Status: TRN-1 complete; LOD-1 next
 Last updated: 2026-10-29
 
 Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
@@ -22,7 +22,7 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
 | PRF-1 | P1 | Core profiling and chunk merge | ING-1 | Completeness, uniqueness, numeric/date/categorical statistics, and quality/info artifacts use explicit formulas; per-chunk records merge; accuracy is `N/A`. Advanced rules, sampling, spill, and reports are v2. | Done |
 | ASM-1 | P1 | Source-only assessment and draft plan | ING-1, PRF-1, PLN-1, EXE-1 | Source-only intent is detected; read-only full-source assessment runs; draft plan lists issues, assumptions, and missing inputs; no writes; confirmation builds an executable plan. | Done |
 | TRN-0 | P1 | Reusable transformation modules | FND-1 | Separate, deterministic, idempotent modules are added in batches of five; inputs are not mutated; failures use structured errors. | Done |
-| TRN-1 | P1 | Transformation DSL | TRN-0, PLN-1 | Cleansing, casting, standardization, filtering, and imputation are deterministic and idempotent. | Pending |
+| TRN-1 | P1 | Transformation DSL | TRN-0, PLN-1 | Cleansing, casting, standardization, filtering, and imputation are deterministic and idempotent. | Done |
 | LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and PostgreSQL insert/upsert/truncate modes are transactional and safe. | Pending |
 | MON-1 | P1 | Monitoring and errors | FND-1 | Transform CSV, execution JSONL, error taxonomy, redaction, and fallback logging work. | Pending |
 | API-1 | P1 | FastAPI interface | WF-1 | Run create/status/approve/cancel/logs/health endpoints meet the API contract. | Done |
@@ -42,6 +42,11 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
   `AGENT_ETL_CLEANUP_POLICY=cleanup|retain`.
 - Filtering rows, coercing date parsing, and replacing values with null are destructive and
   require approval; assessment plans reject them.
+- Plan validation is schema-agnostic: column existence, dtype compatibility, and all-null
+  behavior are checked during execution. Plan-time schema-aware validation is v2 `TRN-7`.
+- Operation roles are inferred from registry metadata: a transformation must require a
+  pipeline DataFrame input and declare no side effects; a destination must declare side
+  effects. Modules with unusual signatures need explicit role metadata later.
 - API run state, results, in-memory logs, and the background scheduler are process-local. A
   restart loses active runs, stored API results, and logs.
 - `RunManager` retains workflows, outcomes, and logs for the process lifetime; a retention or
