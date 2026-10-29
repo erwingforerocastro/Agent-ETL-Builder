@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from application.validation.errors import PlanValidationErrorFactory
-from application.validation.operations import OperationPolicy, iter_operations
+from application.validation.operations import (
+    OperationCatalog,
+    OperationSafetyPolicy,
+    iter_operations,
+)
 from domain.entities.plan import ExecutionPlan
 
 
@@ -12,15 +16,22 @@ class ApprovalValidator:
 
     def __init__(
         self,
-        policy: OperationPolicy,
+        catalog: OperationCatalog,
+        safety: OperationSafetyPolicy,
         error_factory: PlanValidationErrorFactory | None = None,
     ) -> None:
-        self._policy = policy
+        self._catalog = catalog
+        self._safety = safety
         self._error_factory = error_factory or PlanValidationErrorFactory()
 
     def validate(self, plan: ExecutionPlan) -> None:
         requiring_approval = [
-            call.operation for call in iter_operations(plan) if self._policy.requires_approval(call)
+            call.operation
+            for call in iter_operations(plan)
+            if self._safety.requires_approval(
+                call,
+                self._catalog.metadata(call.operation),
+            )
         ]
         if not requiring_approval:
             return

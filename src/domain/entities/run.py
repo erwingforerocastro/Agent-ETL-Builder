@@ -8,23 +8,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 
+from domain.entities._validation import (
+    require_aware_datetime,
+    require_non_negative_int,
+    require_text,
+)
 from domain.entities.plan import ExecutionPlan
 from domain.errors import EtlError
-
-
-def _require_text(value: str, field_name: str) -> None:
-    if not value.strip():
-        raise ValueError(f"{field_name} must not be blank")
-
-
-def _require_non_negative_int(value: int, field_name: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"{field_name} must be a non-negative integer")
-
-
-def _require_aware(value: datetime, field_name: str) -> None:
-    if value.tzinfo is None:
-        raise ValueError(f"{field_name} must be timezone-aware")
 
 
 class RunStatus(StrEnum):
@@ -185,9 +175,9 @@ class PlanRequest:
     mode: str = "pipeline"
 
     def __post_init__(self) -> None:
-        _require_text(self.run_id, "run_id")
-        _require_text(self.thread_id, "thread_id")
-        _require_text(self.message, "message")
+        require_text(self.run_id, "run_id")
+        require_text(self.thread_id, "thread_id")
+        require_text(self.message, "message")
         if self.mode not in {"pipeline", "assessment"}:
             raise ValueError("mode must be 'pipeline' or 'assessment'")
 
@@ -239,23 +229,23 @@ class Run:
     updated_at: datetime
 
     def __post_init__(self) -> None:
-        _require_text(self.run_id, "run_id")
-        _require_text(self.thread_id, "thread_id")
-        _require_text(self.registry_version, "registry_version")
+        require_text(self.run_id, "run_id")
+        require_text(self.thread_id, "thread_id")
+        require_text(self.registry_version, "registry_version")
         if self.mode not in {"pipeline", "assessment"}:
             raise ValueError("mode must be 'pipeline' or 'assessment'")
-        _require_non_negative_int(self.attempt, "attempt")
-        _require_non_negative_int(self.clarification_attempts, "clarification_attempts")
+        require_non_negative_int(self.attempt, "attempt")
+        require_non_negative_int(self.clarification_attempts, "clarification_attempts")
         if not isinstance(self.status, RunStatus):
             raise ValueError("status must be a RunStatus")
         if not isinstance(self.approval_state, ApprovalState):
             raise ValueError("approval_state must be an ApprovalState")
-        _require_aware(self.created_at, "created_at")
-        _require_aware(self.updated_at, "updated_at")
+        require_aware_datetime(self.created_at, "created_at")
+        require_aware_datetime(self.updated_at, "updated_at")
         if self.updated_at < self.created_at:
             raise ValueError("updated_at must not precede created_at")
         if self.plan_hash is not None:
-            _require_text(self.plan_hash, "plan_hash")
+            require_text(self.plan_hash, "plan_hash")
         if self.error is not None and not isinstance(self.error, EtlError):
             raise ValueError("error must be an EtlError")
         if (self.plan is None) != (self.plan_hash is None):
@@ -308,7 +298,7 @@ class Run:
         registry_version: str,
         now: datetime,
     ) -> Run:
-        _require_aware(now, "now")
+        require_aware_datetime(now, "now")
         return cls(
             run_id=run_id,
             thread_id=thread_id,
@@ -342,7 +332,7 @@ class Run:
         error: EtlError | None = None,
     ) -> Run:
         """Return the next run state, enforcing lifecycle transitions."""
-        _require_aware(now, "now")
+        require_aware_datetime(now, "now")
         if self.status.terminal:
             raise ValueError(f"run is already terminal: {self.status}")
         allowed = _ALLOWED_TRANSITIONS[self.status]

@@ -1,4 +1,4 @@
-"""Application-facing module registry contract."""
+"""Application-facing module registry contracts."""
 
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -6,7 +6,9 @@ from typing import Any, Protocol
 from domain.entities.registry import ModuleMetadata, RegistrySnapshot
 
 
-class ModuleRegistryPort(Protocol):
+class ModuleRegistryReadPort(Protocol):
+    """Read-only access to registry metadata."""
+
     def snapshot(self) -> RegistrySnapshot: ...
 
     def get(
@@ -23,6 +25,10 @@ class ModuleRegistryPort(Protocol):
         version: str | None = None,
     ) -> ModuleMetadata: ...
 
+
+class ModuleFunctionResolverPort(Protocol):
+    """Resolves an allowlisted operation to its bound callable."""
+
     def function_for(
         self,
         name: str,
@@ -30,4 +36,13 @@ class ModuleRegistryPort(Protocol):
         version: str | None = None,
     ) -> Callable[..., Any]: ...
 
-    def ensure_version(self, expected_version: str) -> None: ...
+
+class ModuleRegistryPort(ModuleRegistryReadPort, ModuleFunctionResolverPort, Protocol):
+    """Combined registry contract for consumers that need metadata and callables."""
+
+
+__all__ = [
+    "ModuleFunctionResolverPort",
+    "ModuleRegistryPort",
+    "ModuleRegistryReadPort",
+]

@@ -9,7 +9,7 @@ from application.registry.vocabulary import KEEP_POLICIES
 from domain.errors import TransformationError
 from infrastructure.transformations._common import (
     require_columns,
-    require_non_empty_columns,
+    require_non_empty_when_provided,
     require_unique_columns,
 )
 
@@ -24,7 +24,7 @@ def drop_duplicate_rows(
 ) -> pd.DataFrame:
     """Return a copy with duplicate rows removed and a reset index."""
     require_unique_columns(df, module=__name__)
-    require_non_empty_columns(subset, module=__name__, parameter="subset")
+    require_non_empty_when_provided(subset, module=__name__, parameter="subset")
     if keep not in KEEP_POLICIES:
         raise TransformationError(
             code="TRANSFORMATION_INVALID_PARAMETER",

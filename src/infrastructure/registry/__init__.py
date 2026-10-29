@@ -10,22 +10,14 @@ from infrastructure.registry.module_registry import (
     ModuleRegistry,
     build_module_registry,
 )
-from infrastructure.registry.validators import (
-    DependencyValidator,
-    ModuleMetadataBuilder,
-    RegistrySnapshotBuilder,
-    SignatureValidator,
-)
+from infrastructure.registry.validators import ModuleMetadataBuilder
 
 __all__ = [
     "ALLOWED_MODULE_PREFIX",
     "CAPABILITY_PACKAGES",
     "MODULE_FUNCTIONS",
-    "DependencyValidator",
     "ModuleMetadataBuilder",
     "ModuleRegistry",
-    "RegistrySnapshotBuilder",
-    "SignatureValidator",
     "build_module_registry",
     "build_snapshot",
 ]

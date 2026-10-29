@@ -1,11 +1,11 @@
-"""Operation traversal and policy helpers for plan validation."""
+"""Operation traversal, registry lookup, and side-effect policy."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
-from application.ports.module_registry import ModuleRegistryPort
+from application.ports.module_registry import ModuleRegistryReadPort
 from application.validation.constants import (
     DESTRUCTIVE_OPERATIONS,
     WRITE_OPERATION_TOKENS,
@@ -47,12 +47,12 @@ def iter_operations(plan: ExecutionPlan) -> Iterator[OperationCall]:
         )
 
 
-class OperationPolicy:
-    """Looks up registry metadata and classifies operation side effects."""
+class OperationCatalog:
+    """Resolves operation names to allowlisted registry metadata."""
 
     def __init__(
         self,
-        registry: ModuleRegistryPort,
+        registry: ModuleRegistryReadPort,
         error_factory: PlanValidationErrorFactory | None = None,
     ) -> None:
         self._registry = registry
@@ -68,8 +68,11 @@ class OperationPolicy:
             )
         return metadata
 
-    def requires_approval(self, call: OperationCall) -> bool:
-        metadata = self.metadata(call.operation)
+
+class OperationSafetyPolicy:
+    """Classifies write, destructive, and approval-requiring operations."""
+
+    def requires_approval(self, call: OperationCall, metadata: ModuleMetadata) -> bool:
         return self.is_write(call.operation, metadata) or self.is_destructive(
             call.operation, call.params
         )
@@ -92,3 +95,11 @@ class OperationPolicy:
         if operation in DESTRUCTIVE_OPERATIONS:
             return True
         return operation == "cast_column" and params.get("errors") == "coerce"
+
+
+__all__ = [
+    "OperationCall",
+    "OperationCatalog",
+    "OperationSafetyPolicy",
+    "iter_operations",
+]

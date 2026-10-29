@@ -6,8 +6,9 @@ from typing import cast
 
 import pytest
 
-from application.ports.module_registry import ModuleRegistryPort
+from application.ports.module_registry import ModuleRegistryReadPort
 from application.registry.specs import MODULE_SPECS
+from application.validation.settings import PlanValidationSettings
 from domain.entities.plan import (
     ExecutionPlan,
     PlanChunking,
@@ -25,7 +26,7 @@ from domain.errors import PlanValidationError
 from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.module_registry import build_module_registry
 from infrastructure.validation.path_probe import FilesystemWorkspaceProbe
-from infrastructure.validation.plan_sizer import JsonPlanSizer
+from infrastructure.validation.plan_sizer import CanonicalPlanSizer
 from infrastructure.validation.plan_validator import PlanValidator
 
 _DEFAULT_SOURCE = PlanSource(operation="read_csv", params={"path": "input.csv"})
@@ -82,11 +83,13 @@ def _validator(
     return PlanValidator(
         build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS),
         workspace=FilesystemWorkspaceProbe(workspace),
-        sizer=JsonPlanSizer(),
-        max_steps=max_steps,
-        max_chunk_size=max_chunk_size,
-        max_plan_bytes=max_plan_bytes,
-        max_path_length=max_path_length,
+        sizer=CanonicalPlanSizer(),
+        settings=PlanValidationSettings(
+            max_steps=max_steps,
+            max_chunk_size=max_chunk_size,
+            max_plan_bytes=max_plan_bytes,
+            max_path_length=max_path_length,
+        ),
     )
 
 
@@ -112,10 +115,6 @@ class _StubRegistry:
         if module is None:
             raise AssertionError(f"Unknown module: {name}")
         return module
-
-    def ensure_version(self, expected_version: str) -> None:
-        if expected_version != "1.0.0":
-            raise AssertionError("Version mismatch")
 
 
 def _fake_module(
@@ -143,11 +142,11 @@ def _fake_module(
 
 
 def _fake_validator(module: ModuleMetadata, workspace: Path) -> PlanValidator:
-    registry = cast(ModuleRegistryPort, _StubRegistry((module,)))
+    registry = cast(ModuleRegistryReadPort, _StubRegistry((module,)))
     return PlanValidator(
         registry,
         workspace=FilesystemWorkspaceProbe(workspace),
-        sizer=JsonPlanSizer(),
+        sizer=CanonicalPlanSizer(),
     )
 
 

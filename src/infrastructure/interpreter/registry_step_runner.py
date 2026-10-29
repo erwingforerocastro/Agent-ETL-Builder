@@ -5,16 +5,16 @@ from collections.abc import Mapping
 import pandas as pd
 
 from application.ports.module_registry import ModuleRegistryPort
-from infrastructure.sandbox.executor import SandboxExecutor
+from application.ports.sandbox import SandboxRunnerPort
 
 
-class SandboxStepRunner:
+class RegistryStepRunner:
     """Runs registry functions through the sandbox with DataFrame plumbing."""
 
     def __init__(
         self,
         registry: ModuleRegistryPort,
-        sandbox: SandboxExecutor,
+        sandbox: SandboxRunnerPort,
     ) -> None:
         self._registry = registry
         self._sandbox = sandbox
@@ -45,4 +45,4 @@ class SandboxStepRunner:
         return self._sandbox.run(function, data, **params)
 
 
-__all__ = ["SandboxStepRunner"]
+__all__ = ["RegistryStepRunner"]

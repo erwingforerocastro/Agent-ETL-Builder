@@ -7,7 +7,7 @@ import pandas as pd
 from infrastructure.transformations._common import (
     is_text_column,
     require_columns,
-    require_non_empty_columns,
+    require_non_empty_when_provided,
     require_unique_columns,
 )
 
@@ -27,7 +27,7 @@ def drop_empty_rows(
 ) -> pd.DataFrame:
     """Return a copy without rows that are empty across the selected columns."""
     require_unique_columns(df, module=__name__)
-    require_non_empty_columns(subset, module=__name__, parameter="subset")
+    require_non_empty_when_provided(subset, module=__name__, parameter="subset")
 
     if subset is None:
         masks = [_blank_mask(df.iloc[:, position]) for position in range(df.shape[1])]

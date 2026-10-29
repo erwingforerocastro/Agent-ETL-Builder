@@ -4,10 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-
-def _require_text(value: str, field_name: str) -> None:
-    if not value.strip():
-        raise ValueError(f"{field_name} must not be blank")
+from domain.entities._validation import require_text
 
 
 class ConstraintKind(Enum):
@@ -49,8 +46,8 @@ class ModuleInput:
     pipeline_input: bool = False
 
     def __post_init__(self) -> None:
-        _require_text(self.name, "input name")
-        _require_text(self.type, "input type")
+        require_text(self.name, "input name")
+        require_text(self.type, "input type")
         if self.pipeline_input and not self.required:
             raise ValueError("pipeline inputs must be required")
         if len({constraint.kind for constraint in self.constraints}) != len(self.constraints):
@@ -63,8 +60,8 @@ class ModuleOutput:
     description: str
 
     def __post_init__(self) -> None:
-        _require_text(self.type, "output type")
-        _require_text(self.description, "output description")
+        require_text(self.type, "output type")
+        require_text(self.description, "output description")
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +90,7 @@ class ModuleMetadata:
             (self.description, "module description"),
             (self.security_notes, "security notes"),
         ):
-            _require_text(value, field_name)
+            require_text(value, field_name)
         input_names = [item.name for item in self.inputs]
         if len(input_names) != len(set(input_names)):
             raise ValueError("module input names must be unique")
@@ -110,7 +107,7 @@ class RegistrySnapshot:
     modules: tuple[ModuleMetadata, ...]
 
     def __post_init__(self) -> None:
-        _require_text(self.version, "registry version")
+        require_text(self.version, "registry version")
         names = [module.name for module in self.modules]
         if len(names) != len(set(names)):
             raise ValueError("registry module names must be unique")

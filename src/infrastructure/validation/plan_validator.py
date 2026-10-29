@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from application.ports.module_registry import ModuleRegistryPort
+from application.ports.module_registry import ModuleRegistryReadPort
 from application.ports.plan_sizer import PlanSizerPort
 from application.ports.plan_validator import PlanValidatorPort
 from application.ports.workspace import WorkspaceProbePort
 from application.validation.errors import PlanValidationErrorFactory
-from application.validation.plan_check import PlanCheck
+from application.validation.plan_validation_check import PlanValidationCheck
 from application.validation.plan_validator import PlanValidator as CorePlanValidator
+from application.validation.settings import PlanValidationSettings
 from domain.entities.plan import ExecutionPlan
 from domain.errors import PlanValidationError
 from infrastructure.validation.plan_schema import parse_plan
@@ -21,17 +22,12 @@ class PlanValidator(PlanValidatorPort):
 
     def __init__(
         self,
-        registry: ModuleRegistryPort,
+        registry: ModuleRegistryReadPort,
         *,
         workspace: WorkspaceProbePort,
         sizer: PlanSizerPort | None = None,
-        max_steps: int = 100,
-        max_chunk_size: int = 10_000_000,
-        max_plan_bytes: int = 1_000_000,
-        max_path_length: int = 260,
-        max_param_depth: int = 10,
-        max_string_length: int = 10_000,
-        checks: Sequence[PlanCheck] | None = None,
+        settings: PlanValidationSettings | None = None,
+        checks: Sequence[PlanValidationCheck] | None = None,
         error_factory: PlanValidationErrorFactory | None = None,
     ) -> None:
         self._error_factory = error_factory or PlanValidationErrorFactory(module=__name__)
@@ -39,12 +35,7 @@ class PlanValidator(PlanValidatorPort):
             registry,
             workspace=workspace,
             sizer=sizer,
-            max_steps=max_steps,
-            max_chunk_size=max_chunk_size,
-            max_plan_bytes=max_plan_bytes,
-            max_path_length=max_path_length,
-            max_param_depth=max_param_depth,
-            max_string_length=max_string_length,
+            settings=settings,
             checks=checks,
             error_factory=self._error_factory,
         )

@@ -59,41 +59,31 @@ def _supports_signal_timeout() -> bool:
 
 
 @contextmanager
-def timeout_context(seconds: float) -> Iterator[None]:
-    """Bound the enclosed block by wall-clock time.
+def _signal_timeout(seconds: float) -> Iterator[None]:
+    sigalrm = cast(int, signal.SIGALRM)  # type: ignore[attr-defined]
+    previous_handler = signal.getsignal(sigalrm)
 
-    Unix main threads use ``setitimer``/``SIGALRM``. Other threads and
-    platforms use a watchdog thread plus a CPython async exception. The async
-    exception cannot interrupt a callable that is blocked inside native code;
-    that limitation is documented in ``documents/security.txt``.
-    """
-    if seconds <= 0:
-        yield
-        return
+    def handler(_signum: int, _frame: FrameType | None) -> None:
+        raise _SandboxDeadlineExceeded
 
-    if _supports_signal_timeout():
-        sigalrm = cast(int, signal.SIGALRM)  # type: ignore[attr-defined]
-        previous_handler = signal.getsignal(sigalrm)
-
-        def handler(_signum: int, _frame: FrameType | None) -> None:
-            raise _SandboxDeadlineExceeded
-
-        signal.signal(sigalrm, handler)
-        stop_timer: Callable[[], None] | None = None
+    signal.signal(sigalrm, handler)
+    stop_timer: Callable[[], None] | None = None
+    try:
+        stop_timer = _start_signal_timeout(seconds)
         try:
-            stop_timer = _start_signal_timeout(seconds)
-            try:
-                yield
-            except _SandboxDeadlineExceeded as exc:
-                raise SandboxTimeoutError(
-                    context={"timeout_seconds": seconds},
-                ) from exc
-        finally:
-            if stop_timer is not None:
-                stop_timer()
-            signal.signal(sigalrm, previous_handler)
-        return
+            yield
+        except _SandboxDeadlineExceeded as exc:
+            raise SandboxTimeoutError(
+                context={"timeout_seconds": seconds},
+            ) from exc
+    finally:
+        if stop_timer is not None:
+            stop_timer()
+        signal.signal(sigalrm, previous_handler)
 
+
+@contextmanager
+def _watchdog_timeout(seconds: float) -> Iterator[None]:
     finished = threading.Event()
     expired = threading.Event()
     target_thread = threading.get_ident()
@@ -123,6 +113,23 @@ def timeout_context(seconds: float) -> Iterator[None]:
 
     if expired.is_set():
         raise SandboxTimeoutError(context={"timeout_seconds": seconds})
+
+
+@contextmanager
+def timeout_context(seconds: float) -> Iterator[None]:
+    """Bound the enclosed block by wall-clock time.
+
+    Unix main threads use ``setitimer``/``SIGALRM``. Other threads and
+    platforms use a watchdog thread plus a CPython async exception. The async
+    exception cannot interrupt a callable that is blocked inside native code;
+    that limitation is documented in ``documents/security.txt``.
+    """
+    if seconds <= 0:
+        yield
+        return
+    strategy = _signal_timeout if _supports_signal_timeout() else _watchdog_timeout
+    with strategy(seconds):
+        yield
 
 
 @contextmanager

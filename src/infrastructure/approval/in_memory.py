@@ -13,11 +13,12 @@ from infrastructure.clock import SystemClock
 class InMemoryApprovalGateway:
     """Waits for an in-process approval decision with a bounded timeout."""
 
+    _CANCELLATION_POLL_SECONDS = 0.05
+
     def __init__(self, clock: ClockPort | None = None) -> None:
         self._clock = clock or SystemClock()
-        self._lock = threading.RLock()
+        self._condition = threading.Condition()
         self._decisions: dict[str, ApprovalState] = {}
-        self._events: dict[str, threading.Event] = {}
 
     def request(
         self,
@@ -27,28 +28,24 @@ class InMemoryApprovalGateway:
         cancellation: CancellationTokenPort,
     ) -> ApprovalState:
         deadline = self._clock.monotonic() + timeout_seconds
-        while True:
-            if cancellation.is_cancelled():
-                return ApprovalState.CANCELLED
-
-            with self._lock:
+        with self._condition:
+            while True:
+                if cancellation.is_cancelled():
+                    return ApprovalState.CANCELLED
                 decision = self._decisions.get(run_id)
-                event = self._events.setdefault(run_id, threading.Event())
-
-            if decision is not None:
-                return decision
-
-            remaining = deadline - self._clock.monotonic()
-            if remaining <= 0:
-                return ApprovalState.TIMED_OUT
-            event.wait(min(remaining, 0.05))
+                if decision is not None:
+                    return decision
+                remaining = deadline - self._clock.monotonic()
+                if remaining <= 0:
+                    return ApprovalState.TIMED_OUT
+                self._condition.wait(min(remaining, self._CANCELLATION_POLL_SECONDS))
 
     def decide(self, run_id: str, decision: ApprovalState) -> None:
         if decision not in {ApprovalState.APPROVED, ApprovalState.REJECTED}:
             raise ValueError("approval decisions must be approved or rejected")
-        with self._lock:
+        with self._condition:
             self._decisions[run_id] = decision
-            self._events.setdefault(run_id, threading.Event()).set()
+            self._condition.notify_all()
 
 
 __all__ = ["InMemoryApprovalGateway"]

@@ -10,7 +10,7 @@ from domain.errors import TransformationError
 from infrastructure.transformations._common import (
     is_text_column,
     require_columns,
-    require_non_empty_columns,
+    require_non_empty_when_provided,
     require_unique_columns,
 )
 
@@ -47,7 +47,7 @@ def trim_whitespace(
 ) -> pd.DataFrame:
     """Return a copy with text values trimmed according to policy."""
     require_unique_columns(df, module=__name__)
-    require_non_empty_columns(columns, module=__name__, parameter="columns")
+    require_non_empty_when_provided(columns, module=__name__, parameter="columns")
     if policy not in _POLICIES:
         raise TransformationError(
             code="TRANSFORMATION_INVALID_PARAMETER",

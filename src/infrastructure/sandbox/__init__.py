@@ -2,7 +2,6 @@
 
 from infrastructure.sandbox.errors import (
     SandboxError,
-    SandboxExecutionError,
     SandboxMemoryError,
     SandboxTimeoutError,
     SandboxViolationError,
@@ -12,7 +11,6 @@ from infrastructure.sandbox.limits import SandboxLimits
 
 __all__ = [
     "SandboxError",
-    "SandboxExecutionError",
     "SandboxExecutor",
     "SandboxLimits",
     "SandboxMemoryError",

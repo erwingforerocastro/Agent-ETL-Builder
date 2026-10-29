@@ -34,9 +34,9 @@ COMPOSITION_ONLY_CALLS = frozenset(
     {
         "ExecutePlanUseCase",
         "FilesystemWorkspaceProbe",
-        "JsonPlanSizer",
+        "CanonicalPlanSizer",
         "SandboxExecutor",
-        "SandboxStepRunner",
+        "RegistryStepRunner",
         "build_module_registry",
     }
 )

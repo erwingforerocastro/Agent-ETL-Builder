@@ -7,7 +7,7 @@ from domain.entities.plan import ExecutionPlan
 from infrastructure.validation.plan_serialization import serialize_plan
 
 
-class JsonPlanSizer:
+class CanonicalPlanSizer:
     """Measures a plan using its canonical JSON representation."""
 
     def __init__(self, error_factory: PlanValidationErrorFactory | None = None) -> None:
@@ -17,4 +17,4 @@ class JsonPlanSizer:
         return len(serialize_plan(plan, error_factory=self._error_factory))
 
 
-__all__ = ["JsonPlanSizer"]
+__all__ = ["CanonicalPlanSizer"]

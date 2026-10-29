@@ -23,13 +23,6 @@ class ModuleRegistry:
     def snapshot(self) -> RegistrySnapshot:
         return self._snapshot
 
-    def ensure_version(self, expected_version: str) -> None:
-        if expected_version != self._snapshot.version:
-            raise self._version_error(
-                expected=expected_version,
-                current=self._snapshot.version,
-            )
-
     def get(
         self,
         name: str,

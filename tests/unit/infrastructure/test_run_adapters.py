@@ -19,7 +19,7 @@ from infrastructure.cleanup.filesystem import FilesystemCleanup
 from infrastructure.clock import SystemClock
 from infrastructure.planning.deterministic import DeterministicPlanIntake
 from infrastructure.state.run_checkpoint import InMemoryRunCheckpoint
-from infrastructure.validation.plan_hasher import JsonPlanHasher
+from infrastructure.validation.plan_hasher import CanonicalPlanHasher
 
 
 def _plan(*, description: str = "plan") -> ExecutionPlan:
@@ -154,7 +154,7 @@ def test_filesystem_cleanup_rejects_unsafe_run_id(tmp_path: Path) -> None:
 
 
 def test_plan_hasher_is_stable_and_sensitive_to_content() -> None:
-    hasher = JsonPlanHasher()
+    hasher = CanonicalPlanHasher()
 
     assert hasher.hash(_plan()) == hasher.hash(_plan())
     assert hasher.hash(_plan()) != hasher.hash(_plan(description="different"))

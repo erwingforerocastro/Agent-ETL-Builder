@@ -3,10 +3,12 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1, ST-1, REG-1, and PLN-1 complete. Five transformations are registered in
-the versioned allowlist, and structured plans are validated before execution. The bounded
-LangGraph workflow, full sandbox limit enforcement, and PostgreSQL adapters are not implemented
-yet.
+**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, and WF-1 complete. Five transformations are
+registered in the versioned allowlist, structured plans are validated before execution, and
+the bounded run workflow handles intake, approval, execution, retries, cancellation, and
+cleanup. The FastAPI run contract exposes the workflow with background execution. The sandbox
+is an in-process guard; OS-level isolation and PostgreSQL adapters are not implemented yet.
+Additional transformation batches remain in progress.
 
 ## Architecture
 
@@ -82,20 +84,24 @@ Settings come from environment variables:
 |---|---|---|
 | `AGENT_ETL_SERVICE_NAME` | `agent-etl-builder` | Non-blank string |
 | `AGENT_ETL_ENVIRONMENT` | `local` | `local`, `test`, `production` |
+| `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS` | `300` | Positive number |
+| `AGENT_ETL_CLEANUP_POLICY` | `cleanup` | `cleanup`, `retain` |
+| `AGENT_ETL_MAX_REQUEST_BYTES` | `1000000` | Positive integer |
+| `AGENT_ETL_API_KEY` | unset | Optional API key for `/runs` |
 
 Copy `.env.example` values into your shell or a local `.env` loader. Never commit `.env`
 files or secrets.
 
 ## State persistence
 
-V1 uses a single LangGraph `InMemorySaver` created in `src/main.py` and exposed through
-`app.state.checkpointer`. Its lifetime is the current process.
+V1 uses the process-local `InMemoryRunCheckpoint` adapter for run state. Each run snapshot is
+saved after every transition, but the snapshot is lost when the process stops.
 
-- State persists across turns and requests that use the same `thread_id`.
-- State is lost when the process stops; v1 has no cross-restart resume.
-- Each application process or worker has isolated state; do not run multiple workers when
-  conversation continuity is required.
-- Plans, lineage, and run artifacts must be persisted separately from checkpoints.
+- A run is bound to one process; multiple workers do not share run state.
+- V1 has no cross-restart resume.
+- Plans, lineage, and run artifacts must be persisted separately from run checkpoints.
+- The LangGraph `InMemorySaver` factory remains available for future graph-based workflows
+  but is not wired into the application composition root.
 - A persistent PostgreSQL checkpointer is deferred to a later version.
 
 ## Implemented transformations
@@ -153,7 +159,7 @@ parses the payload, and delegates inward. Filesystem path inspection is isolated
 `WorkspaceProbePort` and implemented by `FilesystemWorkspaceProbe`.
 
 Every failure raises `PlanValidationError` with a stable code and sanitized context.
-Validation checks are independent `PlanCheck` implementations assembled by
+Validation checks are independent `PlanValidationCheck` implementations assembled by
 `build_default_checks`; callers can inject a custom pipeline with
 `PlanValidator(..., checks=(...))`.
 
@@ -188,14 +194,72 @@ injected ports. One instance handles one run and checkpoints every transition.
 - Non-success terminal paths run cleanup according to `AGENT_ETL_CLEANUP_POLICY`
   (`cleanup` or `retain`).
 
-Run state is process-local. It does not survive a restart in v1.
+Run state, API results, and logs are process-local. They do not survive a restart in v1.
 
 Configuration:
 
 ```text
 AGENT_ETL_APPROVAL_TIMEOUT_SECONDS=300
 AGENT_ETL_CLEANUP_POLICY=cleanup
+AGENT_ETL_MAX_REQUEST_BYTES=1000000
+# AGENT_ETL_API_KEY=replace-me
 ```
+
+## HTTP API
+
+The API is created in `src/main.py` and exposes the run contract:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/runs` | Create a run from a message and/or structured plan. Returns `201` with run state. |
+| `GET` | `/runs/{run_id}` | Current status, plan, questions, result, cleanup, and next action. |
+| `POST` | `/runs/{run_id}/approve` | Approve or reject: `{"approved": true\|false}`. |
+| `POST` | `/runs/{run_id}/cancel` | Request cancellation at the next safe boundary. |
+| `GET` | `/runs/{run_id}/logs` | Structured lifecycle events for the run. |
+| `GET` | `/health` | Liveness and service metadata. |
+
+Example:
+
+```powershell
+$body = @{
+  message = "Assess input.csv"
+  plan = @{
+    plan_version = "1.0"
+    mode = "assessment"
+    run_id = "1729850000000-a1b2c3d4"
+    name = "assess_input"
+    description = "Assess the input"
+    source = @{ operation = "read_csv"; params = @{ path = "input.csv" } }
+    transformations = @()
+    destination = $null
+    chunking = @{ enabled = $true; size = 1000 }
+    on_error = "fail_fast"
+    approval_required = $false
+  }
+} | ConvertTo-Json -Depth 6
+
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/runs `
+  -ContentType application/json -Body $body
+```
+
+Behavior notes:
+
+- Runs that are ready execute on a background thread pool; API requests never wait for
+  execution. Approval-gated runs execute after `POST /runs/{run_id}/approve`.
+- Message-only requests currently return `awaiting_clarification` because no plan builder is
+  configured. Submit a structured `plan` to execute.
+- Plans are schema-parsed, validated, and only then used to create a run. Invalid plans return
+  `400`; unknown runs return `404`; state conflicts return `409`. Pipeline plans containing
+  writes or destructive steps must set `approval_required: true`; the workflow still derives
+  the final approval requirement from registry policy.
+- Errors use `{code, message, retryable, details?}` and never expose internal stack traces.
+- Request bodies are limited by `AGENT_ETL_MAX_REQUEST_BYTES`. If `AGENT_ETL_API_KEY` is set,
+  `/runs` requires `X-API-Key`; `/health` remains public.
+- Results expose status, output count, data availability, and sanitized step errors; raw
+  DataFrames are not serialized into API responses. Assessment/draft-plan payloads and usage
+  metrics arrive with ASM-1/PRF-1/MON-1.
+- Logs are process-local lifecycle events until MON-1 adds transform CSV and execution JSONL
+  logging. Rate limiting remains a deployment-level control for production exposure.
 
 ## Security baseline
 
@@ -204,8 +268,8 @@ AGENT_ETL_CLEANUP_POLICY=cleanup
 - Secrets belong in environment variables or a secret store and must be redacted from
   logs, errors, prompts, reports, and artifacts.
 - Source data and user context are untrusted; profiling artifacts are read-only.
-- API authentication, request-size limits, and rate limits are required before production
-  exposure.
+- API key authentication and request-size limits are available; rate limiting and production
+  auth hardening are required before broad exposure.
 
 See `documents/security.txt` for the full strategy and `documents/requirements_agent.txt`
 for agent behavior.
@@ -223,6 +287,7 @@ src/
   infrastructure/
   interfaces/
   main.py
+  COMPONENTS.md
 tests/
   architecture/
   integration/
@@ -232,7 +297,7 @@ documents/
 
 ## Roadmap
 
-`EXE-1` and `WF-1` are complete: plans are validated before execution, the sandbox enforces
-workspace, network, timeout, and memory limits, and the workflow bounds clarification,
-approval, retries, cancellation, and cleanup. The next P0 backlog item is `API-1`: the
-FastAPI run contract. Additional `TRN-0` transformation batches remain in progress.
+`EXE-1`, `WF-1`, and `API-1` are complete: plans are validated before execution, the sandbox
+enforces workspace, network, timeout, and memory limits, the workflow bounds clarification,
+approval, retries, cancellation, and cleanup, and the FastAPI run contract executes runs in
+the background. Additional `TRN-0` transformation batches remain in progress.

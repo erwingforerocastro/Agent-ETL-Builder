@@ -99,7 +99,6 @@ def test_registry_satisfies_the_application_port() -> None:
     registry: ModuleRegistryPort = _registry()
 
     assert registry.require("trim_whitespace").version == "1.0.0"
-    registry.ensure_version("1.0.0")
 
 
 def test_registry_resolves_only_allowlisted_callables() -> None:
@@ -128,14 +127,11 @@ def test_registry_returns_none_for_unknown_modules() -> None:
 def test_registry_rejects_version_mismatches() -> None:
     registry = _registry()
 
-    with pytest.raises(RegistryError) as module:
+    with pytest.raises(RegistryError) as caught:
         registry.get("trim_whitespace", version="0.9.0")
-    with pytest.raises(RegistryError) as snapshot:
-        registry.ensure_version("0.9.0")
 
-    assert module.value.code == "REGISTRY_VERSION_MISMATCH"
-    assert module.value.context == {"expected": "0.9.0", "current": "1.0.0"}
-    assert snapshot.value.code == "REGISTRY_VERSION_MISMATCH"
+    assert caught.value.code == "REGISTRY_VERSION_MISMATCH"
+    assert caught.value.context == {"expected": "0.9.0", "current": "1.0.0"}
 
 
 def test_registry_builder_rejects_duplicate_modules() -> None:

@@ -3,20 +3,7 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-
-def _require_text(value: str, field_name: str) -> None:
-    if not value.strip():
-        raise ValueError(f"{field_name} must not be blank")
-
-
-def _require_non_negative_int(value: int, field_name: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"{field_name} must be a non-negative integer")
-
-
-def _require_positive_int(value: int, field_name: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ValueError(f"{field_name} must be a positive integer")
+from domain.entities._validation import require_positive_int, require_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +12,7 @@ class PlanSource:
     params: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        _require_text(self.operation, "source operation")
+        require_text(self.operation, "source operation")
         object.__setattr__(self, "params", dict(self.params))
 
 
@@ -35,7 +22,7 @@ class PlanDestination:
     params: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        _require_text(self.operation, "destination operation")
+        require_text(self.operation, "destination operation")
         object.__setattr__(self, "params", dict(self.params))
 
 
@@ -46,8 +33,8 @@ class PlanTransformation:
     params: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        _require_text(self.step_id, "step_id")
-        _require_text(self.operation, "operation")
+        require_text(self.step_id, "step_id")
+        require_text(self.operation, "operation")
         object.__setattr__(self, "params", dict(self.params))
 
 
@@ -57,7 +44,7 @@ class PlanChunking:
     size: int
 
     def __post_init__(self) -> None:
-        _require_positive_int(self.size, "chunk size")
+        require_positive_int(self.size, "chunk size")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,12 +62,12 @@ class ExecutionPlan:
     approval_required: bool
 
     def __post_init__(self) -> None:
-        _require_text(self.plan_version, "plan_version")
-        _require_text(self.mode, "mode")
-        _require_text(self.run_id, "run_id")
-        _require_text(self.name, "name")
-        _require_text(self.description, "description")
-        _require_text(self.on_error, "on_error")
+        require_text(self.plan_version, "plan_version")
+        require_text(self.mode, "mode")
+        require_text(self.run_id, "run_id")
+        require_text(self.name, "name")
+        require_text(self.description, "description")
+        require_text(self.on_error, "on_error")
         if self.mode not in {"pipeline", "assessment"}:
             raise ValueError("mode must be 'pipeline' or 'assessment'")
         if self.mode == "assessment":

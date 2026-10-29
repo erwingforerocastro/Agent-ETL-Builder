@@ -57,27 +57,8 @@ class SandboxViolationError(SandboxError):
         )
 
 
-class SandboxExecutionError(SandboxError):
-    """Sandboxed execution failed before producing a result."""
-
-    def __init__(
-        self,
-        *,
-        code: str = "SANDBOX_EXECUTION_FAILED",
-        message: str = "Sandboxed execution failed",
-        context: Mapping[str, object] | None = None,
-    ) -> None:
-        super().__init__(
-            code=code,
-            message=message,
-            module=__name__,
-            context=context,
-        )
-
-
 __all__ = [
     "SandboxError",
-    "SandboxExecutionError",
     "SandboxMemoryError",
     "SandboxTimeoutError",
     "SandboxViolationError",

@@ -234,9 +234,6 @@ class _MutableRegistry:
     def function_for(self, name: str, *, version: str | None = None) -> Callable[..., Any]:
         return self._registry.function_for(name, version=version)
 
-    def ensure_version(self, expected_version: str) -> None:
-        self._registry.ensure_version(expected_version)
-
 
 class _Executor:
     def __init__(self, outcomes: list[PlanExecutionResult | Exception]) -> None:

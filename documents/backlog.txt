@@ -1,7 +1,7 @@
 # Agent ETL Builder - Backlog
 
-Version: 1.0
-Status: WF-1 complete; API-1 next; TRN-0 in progress
+Version: 1.1
+Status: API-1 complete; TRN-0 in progress
 Last updated: 2026-10-28
 
 Priority: P0 blocks v1, P1 is required for v1, P2 is later.
@@ -23,7 +23,7 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 | TRN-1 | P1 | Transformation DSL | TRN-0, PLN-1 | Cleansing, casting, standardization, filtering, and imputation are deterministic and idempotent. | Pending |
 | LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and PostgreSQL insert/upsert/truncate modes are transactional and safe. | Pending |
 | MON-1 | P1 | Monitoring and errors | FND-1 | Transform CSV, execution JSONL, error taxonomy, redaction, and fallback logging work. | Pending |
-| API-1 | P1 | FastAPI interface | WF-1 | Run create/status/approve/cancel/logs/health endpoints meet the API contract. | Pending |
+| API-1 | P1 | FastAPI interface | WF-1 | Run create/status/approve/cancel/logs/health endpoints meet the API contract. | Done |
 | TST-1 | P1 | Test and evaluation suite | REG-1, PLN-1, EXE-1, ASM-1 | Unit, integration, edge-case, security, regression, and golden-plan tests pass; core coverage is at least 80%. | Pending |
 | EXP-1 | P2 | Python export | PLN-1, TST-1 | Fixed templates produce an export artifact that is never executed. | Pending |
 | ADP-1 | P2 | Future database adapters | LOD-1 | MySQL, Oracle, or MongoDB adapters pass the shared adapter contract tests. | Pending |
@@ -41,6 +41,16 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 - Approval timeout defaults to 300 seconds and is configurable with
   `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS`; cleanup is configurable with
   `AGENT_ETL_CLEANUP_POLICY=cleanup|retain`.
+- API run state, results, in-memory logs, and the background scheduler are process-local. A
+  restart loses active runs, stored API results, and logs.
+- `RunManager` retains workflows, outcomes, and logs for the process lifetime; a retention or
+  eviction policy is needed for long-running multi-run deployments.
+- API logs currently contain lifecycle events; transform CSV and execution JSONL logging
+  arrive with MON-1.
+- Message-only run creation returns `awaiting_clarification` until a plan builder is
+  configured; API-1 exposes no resume endpoint.
+- `AGENT_ETL_API_KEY` optionally protects `/runs`; rate limiting and production auth
+  hardening remain deployment controls.
 - Exact profiling metrics can exhaust memory; spill limits must be defined.
 - Sampling may miss rare issues; assessment scope and confidence must be visible.
 - Draft plans can remain incomplete until the destination is supplied.

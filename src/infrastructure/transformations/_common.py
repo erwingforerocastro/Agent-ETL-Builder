@@ -31,7 +31,7 @@ def require_columns(df: pd.DataFrame, columns: Sequence[str], *, module: str) ->
     return resolved
 
 
-def require_non_empty_columns(
+def require_non_empty_when_provided(
     columns: Sequence[str] | None,
     *,
     module: str,

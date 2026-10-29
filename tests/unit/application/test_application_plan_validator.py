@@ -41,9 +41,6 @@ class _StubRegistry:
         self.require(name, version=version)
         return lambda: None
 
-    def ensure_version(self, expected_version: str) -> None:
-        assert expected_version == "1.0.0"
-
 
 class _StubWorkspace:
     def __init__(self, info: WorkspacePathInfo) -> None:

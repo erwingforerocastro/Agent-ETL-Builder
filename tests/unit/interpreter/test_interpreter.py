@@ -13,12 +13,12 @@ from domain.entities.plan import (
     PlanSource,
     PlanTransformation,
 )
-from infrastructure.interpreter.step_runner import SandboxStepRunner
+from infrastructure.interpreter.registry_step_runner import RegistryStepRunner
 from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.module_registry import build_module_registry
 from infrastructure.sandbox import SandboxExecutor, SandboxLimits
 from infrastructure.validation.path_probe import FilesystemWorkspaceProbe
-from infrastructure.validation.plan_sizer import JsonPlanSizer
+from infrastructure.validation.plan_sizer import CanonicalPlanSizer
 from infrastructure.validation.plan_validator import PlanValidator
 
 
@@ -32,10 +32,10 @@ def test_interpreter_executes_valid_plan(
     validator = PlanValidator(
         registry,
         workspace=FilesystemWorkspaceProbe(tmp_path),
-        sizer=JsonPlanSizer(),
+        sizer=CanonicalPlanSizer(),
     )
     use_case = ExecutePlanUseCase(
-        SandboxStepRunner(registry, sandbox),
+        RegistryStepRunner(registry, sandbox),
         validator,
     )
     input_file = tmp_path / "input.csv"

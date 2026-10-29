@@ -1,5 +1,5 @@
 """Interpreter infrastructure."""
 
-from infrastructure.interpreter.step_runner import SandboxStepRunner
+from infrastructure.interpreter.registry_step_runner import RegistryStepRunner
 
-__all__ = ["SandboxStepRunner"]
+__all__ = ["RegistryStepRunner"]

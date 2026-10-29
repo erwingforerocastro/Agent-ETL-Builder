@@ -146,42 +146,59 @@ def _reject_dir_fd(operation: str) -> None:
     )
 
 
-@contextmanager
-def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
-    """Allow file content access below ``workspace`` plus read-only runtime paths.
+class _WorkspaceFilesystemGuard:
+    """Confines file access while one sandboxed callable runs."""
 
-    Metadata operations such as ``stat`` remain available because the import
-    machinery needs them; reads, writes, mutations, and symlink creation are
-    checked. Writes and mutations are always confined to the workspace.
-    """
-    root = workspace.resolve()
-    read_roots = (root, *_runtime_read_roots())
-    originals: list[tuple[object, str, Any]] = []
-    original_open = builtins.open
-    original_io_open = io.open
-    original_os_open = os.open
-    original_listdir = os.listdir
-    original_scandir = os.scandir
-    original_remove = os.remove
-    original_unlink = os.unlink
-    original_rmdir = os.rmdir
-    original_mkdir = os.mkdir
-    original_rename = os.rename
-    original_replace = os.replace
-    original_symlink = os.symlink
-    original_link = os.link
-    original_chmod = os.chmod
-    original_utime = os.utime
-    original_truncate = os.truncate
-    original_chdir = os.chdir
+    def __init__(self, workspace: Path) -> None:
+        self._root = workspace.resolve()
+        self._read_roots = (self._root, *_runtime_read_roots())
+        self._original_open = builtins.open
+        self._original_io_open = io.open
+        self._original_os_open = os.open
+        self._original_listdir = os.listdir
+        self._original_scandir = os.scandir
+        self._original_remove = os.remove
+        self._original_unlink = os.unlink
+        self._original_rmdir = os.rmdir
+        self._original_mkdir = os.mkdir
+        self._original_rename = os.rename
+        self._original_replace = os.replace
+        self._original_symlink = os.symlink
+        self._original_link = os.link
+        self._original_chmod = os.chmod
+        self._original_utime = os.utime
+        self._original_truncate = os.truncate
+        self._original_chdir = os.chdir
 
-    def check_write(value: object, operation: str) -> None:
-        _require_path(value, (root,), operation)
+    def install(self) -> list[tuple[object, str, Any]]:
+        originals: list[tuple[object, str, Any]] = []
+        _install(originals, builtins, "open", self.guarded_open)
+        _install(originals, io, "open", self.guarded_io_open)
+        _install(originals, os, "open", self.guarded_os_open)
+        _install(originals, os, "listdir", self.guarded_listdir)
+        _install(originals, os, "scandir", self.guarded_scandir)
+        _install(originals, os, "remove", self.guarded_remove)
+        _install(originals, os, "unlink", self.guarded_unlink)
+        _install(originals, os, "rmdir", self.guarded_rmdir)
+        _install(originals, os, "mkdir", self.guarded_mkdir)
+        _install(originals, os, "rename", self.guarded_rename)
+        _install(originals, os, "replace", self.guarded_replace)
+        _install(originals, os, "symlink", self.guarded_symlink)
+        _install(originals, os, "link", self.guarded_link)
+        _install(originals, os, "chmod", self.guarded_chmod)
+        _install(originals, os, "utime", self.guarded_utime)
+        _install(originals, os, "truncate", self.guarded_truncate)
+        _install(originals, os, "chdir", self.guarded_chdir)
+        return originals
 
-    def check_read(value: object, operation: str) -> None:
-        _require_path(value, read_roots, operation, allow_missing=True)
+    def _check_write(self, value: object, operation: str) -> None:
+        _require_path(value, (self._root,), operation)
+
+    def _check_read(self, value: object, operation: str) -> None:
+        _require_path(value, self._read_roots, operation, allow_missing=True)
 
     def guarded_open(
+        self,
         file: Any,
         mode: str = "r",
         buffering: int = -1,
@@ -192,18 +209,19 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
         opener: Any = None,
     ) -> Any:
         if _is_write_mode(mode):
-            check_write(file, "open")
+            self._check_write(file, "open")
         else:
-            check_read(file, "open")
+            self._check_read(file, "open")
         if opener is not None:
             raise _violation(
                 code="SANDBOX_PATH_DENIED",
                 message="Custom openers are not supported in the sandbox",
                 operation="open",
             )
-        return original_open(file, mode, buffering, encoding, errors, newline, closefd)
+        return self._original_open(file, mode, buffering, encoding, errors, newline, closefd)
 
     def guarded_io_open(
+        self,
         file: Any,
         mode: str = "r",
         buffering: int = -1,
@@ -214,18 +232,19 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
         opener: Any = None,
     ) -> Any:
         if _is_write_mode(mode):
-            check_write(file, "io.open")
+            self._check_write(file, "io.open")
         else:
-            check_read(file, "io.open")
+            self._check_read(file, "io.open")
         if opener is not None:
             raise _violation(
                 code="SANDBOX_PATH_DENIED",
                 message="Custom openers are not supported in the sandbox",
                 operation="io.open",
             )
-        return original_io_open(file, mode, buffering, encoding, errors, newline, closefd)
+        return self._original_io_open(file, mode, buffering, encoding, errors, newline, closefd)
 
     def guarded_os_open(
+        self,
         path: Any,
         flags: int,
         mode: int = 0o777,
@@ -236,44 +255,45 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
             _reject_dir_fd("os.open")
         write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
         if flags & write_flags:
-            check_write(path, "os.open")
+            self._check_write(path, "os.open")
         else:
-            check_read(path, "os.open")
-        return original_os_open(path, flags, mode)
+            self._check_read(path, "os.open")
+        return self._original_os_open(path, flags, mode)
 
-    def guarded_listdir(path: Any = ".") -> Any:
-        check_read(path, "os.listdir")
-        return original_listdir(path)
+    def guarded_listdir(self, path: Any = ".") -> Any:
+        self._check_read(path, "os.listdir")
+        return self._original_listdir(path)
 
-    def guarded_scandir(path: Any = ".") -> Any:
-        check_read(path, "os.scandir")
-        return original_scandir(path)
+    def guarded_scandir(self, path: Any = ".") -> Any:
+        self._check_read(path, "os.scandir")
+        return self._original_scandir(path)
 
-    def guarded_remove(path: Any, *, dir_fd: int | None = None) -> None:
+    def guarded_remove(self, path: Any, *, dir_fd: int | None = None) -> None:
         if dir_fd is not None:
             _reject_dir_fd("os.remove")
-        check_write(path, "os.remove")
-        original_remove(path)
+        self._check_write(path, "os.remove")
+        self._original_remove(path)
 
-    def guarded_unlink(path: Any, *, dir_fd: int | None = None) -> None:
+    def guarded_unlink(self, path: Any, *, dir_fd: int | None = None) -> None:
         if dir_fd is not None:
             _reject_dir_fd("os.unlink")
-        check_write(path, "os.unlink")
-        original_unlink(path)
+        self._check_write(path, "os.unlink")
+        self._original_unlink(path)
 
-    def guarded_rmdir(path: Any, *, dir_fd: int | None = None) -> None:
+    def guarded_rmdir(self, path: Any, *, dir_fd: int | None = None) -> None:
         if dir_fd is not None:
             _reject_dir_fd("os.rmdir")
-        check_write(path, "os.rmdir")
-        original_rmdir(path)
+        self._check_write(path, "os.rmdir")
+        self._original_rmdir(path)
 
-    def guarded_mkdir(path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+    def guarded_mkdir(self, path: Any, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
         if dir_fd is not None:
             _reject_dir_fd("os.mkdir")
-        check_write(path, "os.mkdir")
-        original_mkdir(path, mode)
+        self._check_write(path, "os.mkdir")
+        self._original_mkdir(path, mode)
 
     def guarded_rename(
+        self,
         src: Any,
         dst: Any,
         *,
@@ -282,11 +302,12 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
     ) -> None:
         if src_dir_fd is not None or dst_dir_fd is not None:
             _reject_dir_fd("os.rename")
-        check_write(src, "os.rename")
-        check_write(dst, "os.rename")
-        original_rename(src, dst)
+        self._check_write(src, "os.rename")
+        self._check_write(dst, "os.rename")
+        self._original_rename(src, dst)
 
     def guarded_replace(
+        self,
         src: Any,
         dst: Any,
         *,
@@ -295,11 +316,12 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
     ) -> None:
         if src_dir_fd is not None or dst_dir_fd is not None:
             _reject_dir_fd("os.replace")
-        check_write(src, "os.replace")
-        check_write(dst, "os.replace")
-        original_replace(src, dst)
+        self._check_write(src, "os.replace")
+        self._check_write(dst, "os.replace")
+        self._original_replace(src, dst)
 
     def guarded_symlink(
+        self,
         src: Any,
         dst: Any,
         target_is_directory: bool = False,
@@ -308,18 +330,19 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
     ) -> None:
         if dir_fd is not None:
             _reject_dir_fd("os.symlink")
-        check_write(dst, "os.symlink")
+        self._check_write(dst, "os.symlink")
         source = _path_from(src)
         target = _path_from(dst)
         if source is not None and target is not None:
             if source.is_absolute():
-                _require_path(source, (root,), "os.symlink target")
+                _require_path(source, (self._root,), "os.symlink target")
             else:
                 parent = target if target.is_absolute() else Path.cwd() / target
-                _require_path(parent.parent / source, (root,), "os.symlink target")
-        original_symlink(src, dst, target_is_directory)
+                _require_path(parent.parent / source, (self._root,), "os.symlink target")
+        self._original_symlink(src, dst, target_is_directory)
 
     def guarded_link(
+        self,
         src: Any,
         dst: Any,
         *,
@@ -328,11 +351,12 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
     ) -> None:
         if src_dir_fd is not None or dst_dir_fd is not None:
             _reject_dir_fd("os.link")
-        check_write(src, "os.link")
-        check_write(dst, "os.link")
-        original_link(src, dst)
+        self._check_write(src, "os.link")
+        self._check_write(dst, "os.link")
+        self._original_link(src, dst)
 
     def guarded_chmod(
+        self,
         path: Any,
         mode: int,
         *,
@@ -341,10 +365,11 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
     ) -> None:
         if dir_fd is not None:
             _reject_dir_fd("os.chmod")
-        check_write(path, "os.chmod")
-        original_chmod(path, mode, follow_symlinks=follow_symlinks)
+        self._check_write(path, "os.chmod")
+        self._original_chmod(path, mode, follow_symlinks=follow_symlinks)
 
     def guarded_utime(
+        self,
         path: Any,
         times: Any = None,
         *,
@@ -354,38 +379,32 @@ def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
     ) -> None:
         if dir_fd is not None:
             _reject_dir_fd("os.utime")
-        check_write(path, "os.utime")
+        self._check_write(path, "os.utime")
         if ns is not None:
-            original_utime(path, ns=ns, follow_symlinks=follow_symlinks)
+            self._original_utime(path, ns=ns, follow_symlinks=follow_symlinks)
         else:
-            original_utime(path, times, follow_symlinks=follow_symlinks)
+            self._original_utime(path, times, follow_symlinks=follow_symlinks)
 
-    def guarded_truncate(path: Any, length: int) -> None:
-        check_write(path, "os.truncate")
-        original_truncate(path, length)
+    def guarded_truncate(self, path: Any, length: int) -> None:
+        self._check_write(path, "os.truncate")
+        self._original_truncate(path, length)
 
-    def guarded_chdir(path: Any) -> None:
-        check_write(path, "os.chdir")
-        original_chdir(path)
+    def guarded_chdir(self, path: Any) -> None:
+        self._check_write(path, "os.chdir")
+        self._original_chdir(path)
 
+
+@contextmanager
+def workspace_filesystem_guard(workspace: Path) -> Iterator[None]:
+    """Allow file content access below ``workspace`` plus read-only runtime paths.
+
+    Metadata operations such as ``stat`` remain available because the import
+    machinery needs them; reads, writes, mutations, and symlink creation are
+    checked. Writes and mutations are always confined to the workspace.
+    """
+    guard = _WorkspaceFilesystemGuard(workspace)
+    originals = guard.install()
     try:
-        _install(originals, builtins, "open", guarded_open)
-        _install(originals, io, "open", guarded_io_open)
-        _install(originals, os, "open", guarded_os_open)
-        _install(originals, os, "listdir", guarded_listdir)
-        _install(originals, os, "scandir", guarded_scandir)
-        _install(originals, os, "remove", guarded_remove)
-        _install(originals, os, "unlink", guarded_unlink)
-        _install(originals, os, "rmdir", guarded_rmdir)
-        _install(originals, os, "mkdir", guarded_mkdir)
-        _install(originals, os, "rename", guarded_rename)
-        _install(originals, os, "replace", guarded_replace)
-        _install(originals, os, "symlink", guarded_symlink)
-        _install(originals, os, "link", guarded_link)
-        _install(originals, os, "chmod", guarded_chmod)
-        _install(originals, os, "utime", guarded_utime)
-        _install(originals, os, "truncate", guarded_truncate)
-        _install(originals, os, "chdir", guarded_chdir)
         yield
     finally:
         _restore(originals)
