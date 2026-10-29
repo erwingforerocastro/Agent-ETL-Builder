@@ -23,6 +23,7 @@ from domain.entities.run import (
     WorkflowLimits,
 )
 from domain.errors import (
+    EtlError,
     PlanValidationError,
     RunClarificationExhaustedError,
     RunExecutionError,
@@ -67,6 +68,30 @@ class RunIntakeCoordinator:
                     request,
                     attempt=attempt,
                     previous_error=previous_error,
+                )
+            except PlanValidationError as exc:
+                previous_error = exc
+                if attempt >= self._limits.max_clarification_attempts:
+                    return self._terminator.terminate(
+                        run,
+                        RunStatus.FAILED,
+                        exc,
+                        cleanup=True,
+                    )
+                run = run.transition(
+                    RunStatus.AWAITING_CLARIFICATION,
+                    now=self._clock.now(),
+                    clarification_attempts=attempt,
+                    error=exc,
+                )
+                self._store.save(run)
+                continue
+            except EtlError as exc:
+                return self._terminator.terminate(
+                    run,
+                    RunStatus.FAILED,
+                    exc,
+                    cleanup=True,
                 )
             except Exception as exc:
                 return self._terminator.terminate(

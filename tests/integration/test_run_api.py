@@ -107,8 +107,9 @@ class _Executor:
         plan: ExecutionPlan,
         *,
         cancellation: CancellationTokenPort | None = None,
+        run_id: str | None = None,
     ) -> PlanExecutionResult:
-        del plan, cancellation
+        del plan, cancellation, run_id
         self.calls += 1
         return PlanExecutionResult(status="success", outputs=())
 
@@ -354,7 +355,7 @@ async def test_message_only_run_awaits_a_plan() -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "awaiting_clarification"
-    assert body["next_action"] == "provide_plan"
+    assert body["next_action"] == "clarify"
     assert body["questions"]
     assert scheduler.tasks == []
 

@@ -43,6 +43,10 @@ class TransformationError(EtlError):
     """A deterministic data transformation failed."""
 
 
+class EvaluationError(EtlError):
+    """A source could not be evaluated or profiled."""
+
+
 class IngestionError(EtlError):
     """A source could not be read."""
 
@@ -51,7 +55,11 @@ class LoadError(EtlError):
     """A destination could not be written."""
 
 
-class ProfilingError(EtlError):
+class MonitoringError(EtlError):
+    """A monitoring event could not be written."""
+
+
+class ProfilingError(EvaluationError):
     """A source could not be profiled or its profile could not be merged."""
 
 
@@ -61,6 +69,10 @@ class RegistryError(EtlError):
 
 class PlanValidationError(EtlError):
     """A plan failed schema, registry, argument, path, limit, security, or approval checks."""
+
+
+class PlanSynthesisError(EtlError):
+    """A natural-language plan could not be generated."""
 
 
 class SandboxError(EtlError):
@@ -203,8 +215,11 @@ class RunApprovalError(WorkflowError):
 
 __all__ = [
     "EtlError",
+    "EvaluationError",
     "IngestionError",
     "LoadError",
+    "MonitoringError",
+    "PlanSynthesisError",
     "PlanValidationError",
     "ProfilingError",
     "RegistryError",

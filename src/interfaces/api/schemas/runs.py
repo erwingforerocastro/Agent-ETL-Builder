@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from application.logging.redaction import redact_mapping
 from application.ports.run_log import RunLogEntry
 from application.use_cases.execution_result import PlanExecutionResult
 from application.use_cases.run_outcome import RunOutcome
@@ -15,7 +16,7 @@ from domain.entities.plan import ExecutionPlan
 from domain.entities.run import Run, RunStatus
 from domain.errors import EtlError
 
-NextAction = Literal["provide_plan", "confirm", "approve", "wait", "none"]
+NextAction = Literal["provide_plan", "clarify", "confirm", "approve", "wait", "none"]
 
 
 class RunCreateRequest(BaseModel):
@@ -77,6 +78,26 @@ class RunConfirmRequest(BaseModel):
         return stripped
 
 
+class RunMessageRequest(BaseModel):
+    """Follow-up message for a run waiting on clarification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=10_000)
+    source: str | None = Field(default=None, max_length=2_000)
+    destination: str | None = Field(default=None, max_length=2_000)
+
+    @field_validator("message", "source", "destination")
+    @classmethod
+    def _strip_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+
 class ErrorResponse(BaseModel):
     """Stable API error envelope."""
 
@@ -91,7 +112,7 @@ class ErrorResponse(BaseModel):
             code=error.code,
             message=error.message,
             retryable=error.retryable,
-            details=dict(error.context) or None,
+            details=redact_mapping(error.context) or None,
         )
 
 
@@ -380,6 +401,7 @@ class RunLogEntryResponse(BaseModel):
     step_id: str | None
     module: str
     duration_ms: float | None
+    error: dict[str, Any] | None
     context: dict[str, Any]
     trace_id: str | None
     schema_version: str
@@ -396,6 +418,7 @@ class RunLogEntryResponse(BaseModel):
             step_id=entry.step_id,
             module=entry.module,
             duration_ms=entry.duration_ms,
+            error=dict(entry.error) if entry.error is not None else None,
             context=dict(entry.context),
             trace_id=entry.trace_id,
             schema_version=entry.schema_version,
@@ -411,6 +434,10 @@ def _next_action(run: Run) -> NextAction:
     if run.status in {RunStatus.CREATED, RunStatus.AWAITING_CLARIFICATION}:
         if run.assessment is not None and run.mode == "pipeline":
             return "confirm"
+        if run.mode == "assessment":
+            return "provide_plan"
+        if run.questions:
+            return "clarify"
         return "provide_plan"
     if run.status is RunStatus.AWAITING_APPROVAL:
         return "approve"
@@ -437,5 +464,6 @@ __all__ = [
     "RunCreateRequest",
     "RunLogEntryResponse",
     "RunLogsResponse",
+    "RunMessageRequest",
     "RunResponse",
 ]

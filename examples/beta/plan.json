@@ -1,0 +1,41 @@
+{
+  "plan_version": "1.0",
+  "mode": "pipeline",
+  "run_id": "1729850000000-a1b2c3d4",
+  "name": "clean_beta_input",
+  "description": "Remove duplicate rows, trim whitespace, and save the result as CSV.",
+  "source": {
+    "operation": "read_csv",
+    "params": {
+      "path": "examples/beta/input.csv"
+    }
+  },
+  "transformations": [
+    {
+      "step_id": "s1",
+      "operation": "drop_duplicate_rows",
+      "params": {
+        "keep": "first"
+      }
+    },
+    {
+      "step_id": "s2",
+      "operation": "trim_whitespace",
+      "params": {
+        "policy": "both"
+      }
+    }
+  ],
+  "destination": {
+    "operation": "save_csv",
+    "params": {
+      "path": "beta_output.csv"
+    }
+  },
+  "chunking": {
+    "enabled": false,
+    "size": 10000
+  },
+  "on_error": "fail_fast",
+  "approval_required": true
+}

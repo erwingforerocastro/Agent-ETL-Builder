@@ -13,6 +13,7 @@ from interfaces.api.schemas.runs import (
     RunCreateRequest,
     RunLogEntryResponse,
     RunLogsResponse,
+    RunMessageRequest,
     RunResponse,
 )
 
@@ -82,6 +83,24 @@ def create_run_router(run_manager: RunManager) -> APIRouter:
         run_id: str = _RUN_ID,
     ) -> RunResponse:
         return RunResponse.from_outcome(run_manager.confirm(run_id, request.destination))
+
+    @router.post(
+        "/{run_id}/messages",
+        response_model=RunResponse,
+        responses=_ERROR_RESPONSES,
+    )
+    def message_run(
+        request: RunMessageRequest,
+        run_id: str = _RUN_ID,
+    ) -> RunResponse:
+        return RunResponse.from_outcome(
+            run_manager.message(
+                run_id,
+                request.message,
+                source=request.source,
+                destination=request.destination,
+            )
+        )
 
     @router.post(
         "/{run_id}/cancel",

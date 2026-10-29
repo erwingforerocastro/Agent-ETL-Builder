@@ -19,9 +19,28 @@ class RunLogEntry:
     step_id: str | None = None
     module: str = "run_manager"
     duration_ms: float | None = None
+    error: Mapping[str, object] | None = None
     context: Mapping[str, object] = field(default_factory=dict)
     trace_id: str | None = None
     schema_version: str = "1.0"
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize the event for JSONL monitoring output."""
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "level": self.level,
+            "run_id": self.run_id,
+            "event": self.event,
+            "status": self.status,
+            "message": self.message,
+            "step_id": self.step_id,
+            "module": self.module,
+            "duration_ms": self.duration_ms,
+            "error": dict(self.error) if self.error is not None else None,
+            "context": dict(self.context),
+            "trace_id": self.trace_id,
+            "schema_version": self.schema_version,
+        }
 
 
 class RunLogPort(Protocol):

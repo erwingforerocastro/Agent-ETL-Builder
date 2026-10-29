@@ -15,10 +15,11 @@ resolution-markers = [
 
 [[package]]
 name = "agent-etl-builder"
-version = "0.1.0"
+version = "0.2.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langgraph" },
     { name = "pandas" },
     { name = "psycopg", extra = ["binary"] },
@@ -29,7 +30,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pytest" },
@@ -40,6 +40,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.162.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "langgraph", specifier = ">=1.2.18" },
     { name = "pandas", specifier = "==3.0.6" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
@@ -50,7 +51,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "mypy", specifier = ">=2.4.0" },
     { name = "pandas-stubs", specifier = ">=3.0.5.260914" },
     { name = "pytest", specifier = ">=9.1.1" },

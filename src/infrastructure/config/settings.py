@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from typing import Final, Literal, Self, cast
+from urllib.parse import urlsplit
 
 from domain.entities.run import CleanupPolicy
 from infrastructure.database.config import (
@@ -21,6 +22,8 @@ _DISTRIBUTION_NAME: Final[str] = "agent-etl-builder"
 _VALID_ENVIRONMENTS: Final[frozenset[str]] = frozenset({"local", "test", "production"})
 _DEFAULT_APPROVAL_TIMEOUT_SECONDS: Final[float] = 300.0
 _DEFAULT_MAX_REQUEST_BYTES: Final[int] = 1_000_000
+_DEFAULT_OLLAMA_BASE_URL: Final[str] = "http://127.0.0.1:11434"
+_DEFAULT_OLLAMA_TIMEOUT_SECONDS: Final[float] = 90.0
 
 
 def _distribution_version() -> str:
@@ -52,6 +55,22 @@ def _cleanup_policy_from_env() -> CleanupPolicy:
 def _optional_text_from_env(name: str) -> str | None:
     raw = os.getenv(name, "").strip()
     return raw or None
+
+
+def _positive_float_from_env(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+    return value
+
+
+def _ollama_base_url_from_env() -> str:
+    raw = os.getenv("AGENT_ETL_OLLAMA_BASE_URL", _DEFAULT_OLLAMA_BASE_URL).strip()
+    return raw.rstrip("/") or _DEFAULT_OLLAMA_BASE_URL
 
 
 def _positive_int_from_env(name: str, default: int) -> int:
@@ -87,6 +106,9 @@ class Settings:
     database_statement_timeout_ms: int = DEFAULT_STATEMENT_TIMEOUT_MS
     database_application_name: str = DEFAULT_APPLICATION_NAME
     api_key: str | None = field(default=None, repr=False)
+    ollama_model: str | None = None
+    ollama_base_url: str = _DEFAULT_OLLAMA_BASE_URL
+    ollama_timeout_seconds: float = _DEFAULT_OLLAMA_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         if not self.service_name.strip():
@@ -115,6 +137,18 @@ class Settings:
             raise ValueError("database_application_name must not be blank")
         if self.api_key is not None and not self.api_key.strip():
             raise ValueError("api_key must not be blank when provided")
+        if self.ollama_model is not None and not self.ollama_model.strip():
+            raise ValueError("ollama_model must not be blank when provided")
+        parsed_base_url = urlsplit(self.ollama_base_url)
+        if (
+            parsed_base_url.scheme not in {"http", "https"}
+            or not parsed_base_url.netloc
+            or parsed_base_url.username is not None
+            or parsed_base_url.password is not None
+        ):
+            raise ValueError("ollama_base_url must be an HTTP(S) URL without credentials")
+        if not math.isfinite(self.ollama_timeout_seconds) or self.ollama_timeout_seconds <= 0:
+            raise ValueError("ollama_timeout_seconds must be finite and positive")
 
     @classmethod
     def from_env(cls) -> Self:
@@ -145,6 +179,12 @@ class Settings:
                 DEFAULT_APPLICATION_NAME,
             ).strip(),
             api_key=_optional_text_from_env("AGENT_ETL_API_KEY"),
+            ollama_model=_optional_text_from_env("AGENT_ETL_OLLAMA_MODEL"),
+            ollama_base_url=_ollama_base_url_from_env(),
+            ollama_timeout_seconds=_positive_float_from_env(
+                "AGENT_ETL_OLLAMA_TIMEOUT_SECONDS",
+                _DEFAULT_OLLAMA_TIMEOUT_SECONDS,
+            ),
         )
 
 

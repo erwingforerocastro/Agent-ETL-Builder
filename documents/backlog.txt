@@ -1,8 +1,8 @@
 # Agent ETL Builder - Backlog (v1)
 
-Version: 1.9
-Scope: v1 delivery only
-Status: LOD-1 complete; MON-1 next
+Version: 2.0
+Scope: v1 delivery and the first usable beta
+Status: beta 0.2.0b1 complete; TST-1 partially open
 Last updated: 2026-10-29
 
 Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
@@ -24,9 +24,12 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
 | TRN-0 | P1 | Reusable transformation modules | FND-1 | Separate, deterministic, idempotent modules are added in batches of five; inputs are not mutated; failures use structured errors. | Done |
 | TRN-1 | P1 | Transformation DSL | TRN-0, PLN-1 | Cleansing, casting, standardization, filtering, and imputation are deterministic and idempotent. | Done |
 | LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and PostgreSQL insert/upsert/truncate modes are transactional and safe. | Done |
-| MON-1 | P1 | Monitoring and errors | FND-1 | Transform CSV, execution JSONL, error taxonomy, redaction, and fallback logging work. | Pending |
+| NL-1 | P0 | Natural-language plan synthesis | REG-1, PLN-1 | A local Ollama model returns a registry-constrained transformation draft; source/destination are bound deterministically; invalid drafts are repaired; source schema is sampled, not raw data. | Done |
+| API-2 | P0 | Conversational continuation | API-1, NL-1, WF-1 | `POST /runs/{run_id}/messages` resumes a clarification run, updates missing source/destination, and schedules a ready plan. | Done |
+| MON-1 | P1 | Monitoring and errors | FND-1 | Transform CSV, execution JSONL, error taxonomy, redaction, and fallback logging work. | Done |
 | API-1 | P1 | FastAPI interface | WF-1 | Run create/status/approve/cancel/logs/health endpoints meet the API contract. | Done |
-| TST-1 | P1 | Test and evaluation suite | REG-1, PLN-1, EXE-1, ASM-1 | Unit, integration, edge-case, security, regression, and golden-plan tests pass; core coverage is at least 80%. | Pending |
+| BETA-1 | P0 | Beta kit and release | NL-1, API-2, MON-1 | Smoke script, example data, docs, version/changelog, golden plan-shape tests, and a live Ollama evaluation are available. | Done |
+| TST-1 | P1 | Test and evaluation suite | REG-1, PLN-1, EXE-1, ASM-1 | Unit, integration, edge-case, security, regression, and golden-plan tests pass; core coverage is at least 80%. | Partial |
 
 ## Risks
 
@@ -43,7 +46,18 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
 - Filtering rows, coercing date parsing, and replacing values with null are destructive and
   require approval; assessment plans reject them.
 - Plan validation is schema-agnostic: column existence, dtype compatibility, and all-null
-  behavior are checked during execution. Plan-time schema-aware validation is v2 `TRN-7`.
+  behavior are checked during execution. The natural-language prompt receives a 50-row schema
+  sample, but the plan itself is not validated against it. Plan-time schema-aware validation is
+  v2 `TRN-7`.
+- Natural-language planning requires a running Ollama server and a capable local model. Model
+  quality and latency vary; `llama3.1:8b` is the validated beta default and usually takes
+  15-45 seconds per plan. A model outage or timeout fails the run with a stable synthesis code.
+- The model sees the user message, workspace paths, registry metadata, and sampled column
+  names/dtypes, but not source values. Prompt injection is constrained by the registry-derived
+  JSON schema and the normal plan validator; adversarial prompts remain an ongoing test area.
+- Natural-language conversations are process-local and bounded to 12 turns; they are lost on
+  restart. Conversation persistence, background generation, inline source detection, and
+  non-Ollama providers are v2 work.
 - Operation roles are inferred from registry metadata: a transformation must require a
   pipeline DataFrame input and declare no side effects; a destination must declare side
   effects. Modules with unusual signatures need explicit role metadata later.
@@ -51,8 +65,8 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
   restart loses active runs, stored API results, and logs.
 - `RunManager` retains workflows, outcomes, and logs for the process lifetime; a retention or
   eviction policy is needed for long-running multi-run deployments.
-- Source-only assessment requires an explicit `source` reference. Message-only requests that
-  mention a path inline still return `awaiting_clarification`; inline intent detection is v2.
+- Source-only assessment and natural-language requests require an explicit `source` reference.
+  A path mentioned only inside message text is not detected; inline intent detection is v2.
 - Assessment runs synchronously during run creation and uses a full scan. Large sources can
   delay the response; bounded sampling, an assessment timeout, and background assessment are
   v2 work.
@@ -63,10 +77,10 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
   transformations or choosing among multiple destinations; those are v2.
 - Assessment artifacts are written below `artifacts/<run_id>/`. A pending or failed
   assessment can leave partial artifacts until the run is cancelled or cleaned up.
-- API logs currently contain lifecycle events; transform CSV and execution JSONL logging
-  arrive with MON-1.
-- Message-only run creation without a source or plan returns `awaiting_clarification`; API-1
-  exposes no resume endpoint.
+- API logs contain lifecycle and step events. Execution JSONL and transform CSV files are
+  written per run; log rotation, concurrent writers, and cross-process locking are v2 work.
+- Clarification runs can be continued with `POST /runs/{run_id}/messages`. The follow-up flow
+  is single-process and cannot resume after a restart.
 - `AGENT_ETL_API_KEY` optionally protects `/runs`; rate limiting and production auth
   hardening remain deployment controls.
 - File destinations are atomic overwrite writers. Append mode, compression/encoding options,
@@ -74,8 +88,8 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
 - `PostgresTableLoader` is an adapter, not a plan destination. It requires an existing table
   and does not auto-create schemas/tables or map DataFrame dtypes (`LOD-3`). Registry execution
   still denies network access (`DB-2`).
-- Load lineage, checksums, and load artifacts are not recorded yet; they follow with
-  `MON-1`/`LOD-5`.
+- Load lineage, checksums, and load artifacts are not recorded yet; they follow with `LOD-5`.
+  Monitoring records execution events but not per-load manifests.
 - PostgreSQL sessions open one connection per session; connection pooling, pool exhaustion
   handling, and read-only database role grants are deployment concerns. Server-side batch
   iteration is implemented for source reads.
@@ -108,3 +122,7 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
 Architecture, security, and backlog were reviewed before implementation. Re-review them
 before changing scope, security controls, or persistence guarantees. v2 candidates and
 deferred edge cases are in `documents/backlog_v2.txt`.
+
+`TST-1` remains partial: the beta has unit, integration, security, regression, golden
+plan-shape, and optional live Ollama coverage, but not the full edge-case matrix. Promote the
+remaining cases only when a real user flow needs them.

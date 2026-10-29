@@ -272,7 +272,9 @@ class _Executor:
         plan: ExecutionPlan,
         *,
         cancellation: CancellationTokenPort | None = None,
+        run_id: str | None = None,
     ) -> PlanExecutionResult:
+        del run_id
         self.calls += 1
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, Exception):

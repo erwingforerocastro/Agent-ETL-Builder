@@ -1,10 +1,10 @@
 # Agent ETL Builder - Backlog (v2 candidates)
 
-Version: 2.4-draft
-Status: Deferred work; not part of v1 acceptance
+Version: 2.5-draft
+Status: Deferred work; not part of beta acceptance
 Last updated: 2026-10-29
 
-This file records work intentionally removed from the v1 path to keep the first release small.
+This file records work intentionally removed from the v1/beta path to keep the first release small.
 It is not a commitment to implement every item; promote items only when a real user flow needs
 them.
 
@@ -36,8 +36,15 @@ them.
 | TRN-8 | P2 | Explicit operation-kind metadata | v1 infers source/transformation/destination roles from required pipeline inputs and declared side effects. Explicit read/transform/write kinds are safer for unusual module signatures. | TRN-1, REG-1 |
 | ST-2 | P1 | Persistent checkpoints and crash resume | v1 uses process-local memory only. | ST-1 |
 | DB-2 | P1 | Configured-connection sandbox policy | PostgreSQL reads exist but cannot be selected by validated plans because registry execution denies network access. | DB-1, EXE-1 |
-| API-2 | P2 | Retention, rate limiting, stronger auth | v1 exposes optional API-key protection and process-local logs. | API-1 |
+| API-3 | P2 | Retention, rate limiting, stronger auth | v1 exposes optional API-key protection and process-local logs. | API-1 |
 | WF-2 | P1 | Approval timeout for API-pending runs | The API schedules only `ready` runs; a run left in `awaiting_approval` has no timer that expires it. The configured timeout is enforced only when `RunWorkflow.run()` waits on the decision. | WF-1, API-1 |
+| NL-2 | P1 | Schema-aware plan generation | The beta samples 50 rows for the prompt; full-schema planning and plan-time column validation are deferred. | NL-1, TRN-7 |
+| NL-3 | P1 | Inline source and destination detection | The beta requires explicit `source`/`destination` fields; free-text extraction and ambiguity checks are deferred. | NL-1, ASM-3 |
+| NL-4 | P1 | Background plan generation | Plan generation blocks `POST /runs` for 15-45 seconds. A generating state, polling contract, and cancellation path are deferred. | NL-1, WF-2 |
+| NL-5 | P2 | Persistent conversations | Conversation history and clarification state are process-local and lost on restart. | NL-1, ST-2 |
+| NL-6 | P2 | Remote/OpenAI provider | The beta supports local Ollama only. A provider port with egress consent, cost tracking, and stronger redaction is deferred. | NL-1 |
+| MON-2 | P2 | Log rotation, retention, and locking | The beta writes one JSONL and one transform CSV per run with one writer. Rotation, retention, and cross-process locking are deferred. | MON-1 |
+| UI-1 | P2 | Web UI | The beta exposes FastAPI/OpenAPI plus a smoke script; a browser UI is deferred. | API-1, NL-1 |
 | EXP-1 | P2 | Python export | Fixed-template export is an artifact only and is not on the v1 execution path. | PLN-1, TST-1 |
 | ADP-1 | P2 | Future database adapters | v1 is PostgreSQL-only; MySQL, Oracle, and MongoDB remain future adapters. | LOD-1 |
 | LOD-2 | P2 | File append/compression and locking | v1 file loaders are atomic overwrite-only, use a fixed text encoding, and do not coordinate concurrent writers. | LOD-1, MON-1 |
@@ -62,6 +69,21 @@ them.
 - Assessment reports, HTML rendering, and optional narrative.
 - Artifact path exposure policy if the API is exposed beyond the local workspace
   (currently assessment responses include the writer's absolute paths).
+
+## Deferred natural-language edge cases
+
+The beta agent deliberately stays single-provider and single-process:
+
+- Full-schema or dry-run planning; the beta samples the first 50 rows for column names/dtypes.
+- Plan-time validation that every referenced column exists and has a compatible dtype.
+- Long conversations, summarization, and persistence across restarts.
+- Inline source/destination extraction and ambiguity resolution.
+- Background plan generation and progress polling.
+- Remote providers, data-egress consent, token/cost accounting, and provider fallback.
+- Model retries beyond the workflow repair attempts; deterministic replay of a model response.
+- Larger adversarial prompt-injection and plan-quality evaluation sets.
+- Multi-file sources, joins, and multi-destination plans.
+- A web UI or conversational client beyond FastAPI/OpenAPI and the smoke script.
 
 ## Deferred transformation edge cases
 
@@ -116,6 +138,6 @@ These were intentionally moved out of the v1 profiler:
 
 ## Promotion rule
 
-Before promoting an item, confirm it is needed by the current v1 user flow, define the smallest
+Before promoting an item, confirm it is needed by the current beta user flow, define the smallest
 acceptance test, and keep advanced policy or optional parameters out of the core path until the
 flow exists.

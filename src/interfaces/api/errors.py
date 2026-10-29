@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from domain.errors import (
     EtlError,
+    PlanSynthesisError,
     PlanValidationError,
     RegistryError,
     RunAlreadyExistsError,
@@ -95,6 +96,8 @@ def _status_for(error: EtlError) -> int:
         return 409
     if isinstance(error, PlanValidationError):
         return 400
+    if isinstance(error, PlanSynthesisError):
+        return 503
     if isinstance(error, (RegistryError, SandboxError)):
         return 500
     if isinstance(error, WorkflowError):

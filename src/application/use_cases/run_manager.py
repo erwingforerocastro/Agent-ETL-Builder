@@ -20,7 +20,7 @@ from application.ports.run_log import RunLogEntry, RunLogPort
 from application.use_cases.run_outcome import RunOutcome
 from application.use_cases.run_workflow import RunWorkflow
 from domain.entities.plan import ExecutionPlan
-from domain.entities.run import PlanRequest, RunStatus
+from domain.entities.run import PlanRequest, Run, RunStatus
 from domain.errors import PlanValidationError, RunInvalidStateError, RunNotFoundError
 
 
@@ -71,12 +71,14 @@ class RunManager:
         clock: ClockPort,
         cancellation_factory: Callable[[], CancellationTokenPort],
         assessment_intake_factory: PlanIntakeFactoryPort | None = None,
+        nl_intake_factory: PlanIntakeFactoryPort | None = None,
     ) -> None:
         self._workflow_factory = workflow_factory
         self._plan_parser = plan_parser
         self._validator = validator
         self._intake_factory = intake_factory
         self._assessment_intake_factory = assessment_intake_factory
+        self._nl_intake_factory = nl_intake_factory
         self._checkpoints = checkpoints
         self._run_log = run_log
         self._scheduler = scheduler
@@ -126,6 +128,38 @@ class RunManager:
             "assessment_confirmed",
             status=outcome.run.status.value,
             context={"plan_hash": outcome.run.plan_hash},
+        )
+        if outcome.run.status is RunStatus.READY:
+            self._schedule(run_id)
+        return outcome
+
+    def message(
+        self,
+        run_id: str,
+        message: str,
+        *,
+        source: str | None = None,
+        destination: str | None = None,
+    ) -> RunOutcome:
+        """Continue a run that is waiting for clarification."""
+        workflow = self._require_workflow(run_id, operation="message")
+        run = workflow.get()
+        if run.assessment is not None:
+            raise RunInvalidStateError(status=run.status.value, operation="message")
+        request = self._resume_request(
+            run,
+            message,
+            source=source,
+            destination=destination,
+        )
+        outcome = workflow.resume(request)
+        with self._lock:
+            self._outcomes[run_id] = outcome
+        self._log(
+            run_id,
+            "run_message_received",
+            status=outcome.run.status.value,
+            context={"clarification_attempts": outcome.run.clarification_attempts},
         )
         if outcome.run.status is RunStatus.READY:
             self._schedule(run_id)
@@ -292,6 +326,8 @@ class RunManager:
             and _is_source_only(command)
         ):
             return self._assessment_intake_factory.create(None)
+        if plan is None and self._nl_intake_factory is not None:
+            return self._nl_intake_factory.create(None)
         return self._intake_factory.create(plan)
 
     def _resolve_identity(
@@ -335,6 +371,30 @@ class RunManager:
                 source=command.source,
                 destination=command.destination,
                 mode=mode,
+            )
+        except ValueError as exc:
+            raise PlanValidationError(
+                code="RUN_INVALID_REQUEST",
+                message=str(exc),
+                module=__name__,
+            ) from exc
+
+    def _resume_request(
+        self,
+        run: Run,
+        message: str,
+        *,
+        source: str | None,
+        destination: str | None,
+    ) -> PlanRequest:
+        try:
+            return PlanRequest(
+                run_id=run.run_id,
+                thread_id=run.thread_id,
+                message=message,
+                source=source,
+                destination=destination,
+                mode=run.mode,
             )
         except ValueError as exc:
             raise PlanValidationError(

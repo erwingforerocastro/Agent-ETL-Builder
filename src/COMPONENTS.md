@@ -44,18 +44,21 @@ Settings.from_env()
   |
   +--> SandboxExecutor(SandboxLimits(), workspace)
   +--> RegistryStepRunner(module_registry, sandbox)
-  |       -> ExecutePlanUseCase(step_runner, plan_validator)
+  +--> JsonlRunLog(InMemoryRunLog(), logs_root=workspace / "logs")
+  +--> CsvTransformLog(artifacts_root=workspace / "artifacts")
+  |       -> ExecutePlanUseCase(step_runner, plan_validator, run_log, transform_log)
   |
   +--> FilesystemProfileWriter(workspace / "artifacts")
   +--> ProfileSourceUseCase(PandasChunkProfiler(), profile_writer)
   +--> WorkspaceSourceReader(workspace_probe)
+  +--> WorkspaceSourceSchemaProbe(reader)
   |       -> AssessSourceUseCase(reader, profile_source)
   |       -> AssessmentPlanIntakeFactory(assessment)
   |
   +--> SystemClock()
   +--> InMemoryRunCheckpoint()
   +--> InMemoryApprovalGateway(clock)
-  +--> FilesystemCleanup(workspace / "artifacts")
+  +--> FilesystemCleanup(workspace / "artifacts")  # preserves transform_log.csv
   +--> CanonicalPlanHasher()
   +--> WorkflowLimits(
           approval_timeout_seconds=settings.approval_timeout_seconds,
@@ -65,12 +68,13 @@ Settings.from_env()
   +--> RunWorkflowFactory(shared workflow adapters)
   +--> SubmittedPlanIntakeFactory()
   +--> AssessmentPlanIntakeFactory(assessment)
+  +--> OllamaPlanSynthesizer(...) when settings.ollama_model is set
+  |       -> NaturalLanguagePlanIntakeFactory(synthesizer, parser, schema_probe)
   +--> PydanticPlanParser()
-  +--> InMemoryRunLog()
   +--> ThreadPoolRunScheduler(max_workers=4)
   |       -> RunManager(
                workflow_factory, plan_parser, validator,
-               intake_factory, assessment_intake_factory,
+               intake_factory, assessment_intake_factory, nl_intake_factory,
                checkpoints, run_log, scheduler, clock, cancellation_factory,
              )
   |
@@ -79,7 +83,7 @@ Settings.from_env()
           run_manager=run_manager,
           max_request_bytes=settings.max_request_bytes,
           api_key=settings.api_key,
-          shutdown_callbacks=(run_scheduler.shutdown,),
+          shutdown_callbacks=(run_scheduler.shutdown, ollama_synthesizer.close),
        )
          -> FastAPI + health router + run router + error handlers
 ```
@@ -88,8 +92,11 @@ A `RunWorkflow` instance is intentionally **not** shared between runs: it rememb
 `run_id` and routes one lifecycle. `RunManager` creates a fresh workflow, a fresh
 cancellation token, and a fresh intake adapter for each run, then schedules execution when
 the run becomes `ready`. Source-only requests select `AssessmentPlanIntake`; plan-supplied
-requests use `SubmittedPlanIntake`. `app.state.database` exposes the optional database adapter,
-and `app.state.postgres_loader` exposes the transactional table loader for later plan binding.
+requests use `SubmittedPlanIntake`; a request with no plan uses
+`NaturalLanguagePlanIntake` when Ollama is configured, otherwise it falls back to
+`SubmittedPlanIntake`. `app.state.database` and `app.state.postgres_loader` expose the
+optional database adapters. `app.state.source_schema_probe`, `app.state.transform_log`, and
+`app.state.ollama_synthesizer` expose the new beta adapters for inspection and tests.
 
 ## 3. Domain (`src/domain/`)
 
@@ -102,6 +109,7 @@ and `app.state.postgres_loader` exposes the transactional table loader for later
 | `PlanTransformation` | One step with a unique `step_id`, operation, and parameters. |
 | `PlanChunking` | Chunking flag and positive chunk size. |
 | `ExecutionPlan` | Validated plan aggregate. Enforces mode-specific source/destination rules, unique step ids, and non-blank fields. |
+| `PlanDraft` | Model-facing transformation draft before source/destination binding; carries questions/missing inputs and unique step ids. |
 
 ### Run entities (`entities/run.py`)
 
@@ -153,11 +161,14 @@ return assessment status without a second store.
 ### Errors (`errors.py`)
 
 `EtlError` is the shared base. It carries a stable `code`, sanitized `message`, `module`,
-`retryable` flag, and structured `context`. Subclasses cover transformation, ingestion, load,
-registry, plan validation, sandbox, and workflow failures. Workflow-specific errors include
+`retryable` flag, and structured `context`. Subclasses cover evaluation/profiling, transformation,
+ingestion, load, monitoring, registry, plan validation, plan synthesis, sandbox, and workflow
+failures. Workflow-specific errors include
 `RUN_NOT_FOUND`, `RUN_ALREADY_EXISTS`, `RUN_INVALID_STATE`, `RUN_CANCELLED`,
 `RUN_CLARIFICATION_EXHAUSTED`, `RUN_APPROVAL_REJECTED`, `RUN_APPROVAL_TIMEOUT`,
 `RUN_PLAN_STALE`, `RUN_EXECUTION_FAILED`, `RUN_INTAKE_FAILED`, and `RUN_APPROVAL_FAILED`.
+`PlanSynthesisError` uses `PLAN_SYNTHESIS_TIMEOUT`, `PLAN_SYNTHESIS_UNAVAILABLE`,
+`PLAN_SYNTHESIS_HTTP_ERROR`, `PLAN_SYNTHESIS_INVALID`, or `PLAN_SYNTHESIS_RESPONSE_TOO_LARGE`.
 
 ### Shared invariant helpers (`entities/_validation.py`)
 
@@ -172,8 +183,10 @@ last column.
 
 | Port | Responsibility | Adapter |
 |---|---|---|
-| `PlanIntakePort` | Turn a request into a plan or clarification request. | `SubmittedPlanIntake` (API), `DeterministicPlanIntake` (tests) |
-| `PlanIntakeFactoryPort` | Create one intake adapter per run. | `SubmittedPlanIntakeFactory` |
+| `PlanIntakePort` | Turn a request into a plan or clarification request. | `SubmittedPlanIntake`, `AssessmentPlanIntake`, `NaturalLanguagePlanIntake`, `DeterministicPlanIntake` (tests) |
+| `PlanIntakeFactoryPort` | Create one intake adapter per run. | `SubmittedPlanIntakeFactory`, `AssessmentPlanIntakeFactory`, `NaturalLanguagePlanIntakeFactory` |
+| `PlanSynthesizerPort` | Turn a bounded conversation and source schema into a transformation draft. | `OllamaPlanSynthesizer` |
+| `SourceSchemaPort` | Return a bounded source column/dtype view for prompting. | `WorkspaceSourceSchemaProbe` |
 | `PlanParserPort` | Parse an untrusted JSON-compatible plan payload. | `PydanticPlanParser` |
 | `PlanValidatorPort` | Validate a domain plan. | `infrastructure.validation.plan_validator.PlanValidator` |
 | `ModuleRegistryReadPort` | Read registry snapshots and metadata. | `ModuleRegistry` |
@@ -190,7 +203,8 @@ last column.
 | `CancellationTokenPort` | Signal and observe cancellation. | `EventCancellationToken` |
 | `ClockPort` | Aware time, monotonic time, and sleep. | `SystemClock` |
 | `CleanupPort` | Remove or retain partial run artifacts. | `FilesystemCleanup` |
-| `RunLogPort` | Append and read structured run events. | `InMemoryRunLog` |
+| `RunLogPort` | Append and read structured run events. | `JsonlRunLog` over `InMemoryRunLog` |
+| `TransformLogPort` | Append one transformation CSV row per step. | `CsvTransformLog` |
 | `BackgroundSchedulerPort` | Submit run work outside the request thread. | `ThreadPoolRunScheduler` |
 | `DatabasePort` | Open a transaction-scoped read-only or writable session. | `PostgresDatabase` |
 | `DatabaseSessionPort` | Parameterized fetch/execute/execute-many plus server-side batch iteration. | `PostgresSession` |
@@ -294,6 +308,41 @@ profiling artifacts below `artifacts/<run_id>/`, and creates the destination onl
 confirmation and approval. Inline source intent detection, sampling, caching, draft editing,
 and database-backed assessment are v2 candidates.
 
+### Natural-language planning (`application/planning/`, `infrastructure/planning/`)
+
+| Component | Purpose |
+|---|---|
+| `NaturalLanguagePlanIntake` | Per-run stateful intake: binds paths, asks for missing input, samples schema, calls the synthesizer, builds the pipeline payload, and keeps bounded history. |
+| `NaturalLanguagePlanIntakeFactory` | Creates one intake per run with the shared synthesizer, parser, and schema probe. |
+| `PlanPromptBuilder` | Deterministic system prompt with safety rules, source/destination paths, source columns/dtypes, registry catalog, and previous validation errors. |
+| `build_plan_draft_schema` | Registry-derived JSON schema for transformation drafts: operation enums, exact parameter names, enums, optional fields, no extra properties. |
+| `parse_plan_draft` | Strict Pydantic parser: assigns `s1..sn`, removes empty/None optional params, rejects extra fields. |
+| `OllamaPlanSynthesizer` | Calls local Ollama `/api/chat` with the schema and temperature 0; maps timeout, HTTP, invalid JSON, empty content, and oversized responses to `PlanSynthesisError`. |
+| `WorkspaceSourceSchemaProbe` | Reads the first 50 rows through `WorkspaceSourceReader` for column names and dtypes only. |
+| `binding` | Maps `.csv`/`.json`/`.jsonl`/`.ndjson`/`.parquet`/`.pq` to allowlisted readers/writers and detects a source/destination collision. |
+
+```text
+POST /runs {message, source, destination}
+  -> NaturalLanguagePlanIntake.request
+       -> bind reader/writer by extension (or ask)
+       -> WorkspaceSourceSchemaProbe.inspect(source)  # columns/dtypes only
+       -> OllamaPlanSynthesizer.synthesize(...)
+            -> PlanPromptBuilder + registry schema
+            -> local Ollama /api/chat
+            -> parse_plan_draft -> PlanDraft
+       -> bind source/destination + assign step IDs
+       -> PydanticPlanParser.parse(payload)
+  -> RunIntakeCoordinator validates with PlanValidator
+       -> invalid: feed error back up to 3 attempts
+       -> questions: awaiting_clarification
+       -> valid: awaiting_approval
+```
+
+The model never sees source values. It cannot invent operations or parameters because the JSON
+schema is registry-derived and the normal validator is still the final gate. Follow-up messages
+use `POST /runs/{id}/messages` and `RunWorkflow.resume`, so the same intake keeps its bounded
+history.
+
 `RunWorkflow` is a thin facade over four focused collaborators. It owns the run id and routes
 each public operation to the right stage.
 
@@ -301,7 +350,7 @@ each public operation to the right stage.
 |---|---|
 | `RunWorkflow` | Public state-machine facade: `start`, `resume`, `confirm`, `run`, `approve`, `cancel`, `get`. |
 | `RunWorkflowFactory` | Assembles one `RunWorkflow` from shared adapters for one run. |
-| `RunManager` | API-facing coordinator: parses/validates plans, selects assessment or submitted intake, creates workflows and tokens, stores outcomes, schedules background execution, logs lifecycle events, and serves status/logs. |
+| `RunManager` | API-facing coordinator: parses/validates plans, selects assessment/natural-language/submitted intake, creates workflows and tokens, stores outcomes, resumes clarification messages, schedules background execution, logs lifecycle events, and serves status/logs. |
 | `RunIntakeCoordinator` | Intake, clarification/repair loop, validation, plan hashing, approval requirement, and preparation for approval/execution. |
 | `RunApprovalCoordinator` | Waits for a decision, records approve/reject, and maps timeout/cancel/reject to terminal states. |
 | `RunExecutionCoordinator` | Stale-plan checks, cancellation boundaries, bounded retries with backoff, and terminal execution outcomes. |
@@ -445,15 +494,20 @@ cleanup. Those are deployment-level hardening items.
 |---|---|
 | `approval/in_memory.py` | Condition-based in-process approval gateway with timeout and cancellation polling. |
 | `cancellation.py` | `EventCancellationToken` backed by `threading.Event`. |
-| `cleanup/filesystem.py` | Removes or retains `artifacts/<run_id>` with path-safety checks. |
+| `cleanup/filesystem.py` | Removes partial artifacts with path-safety checks; preserves `transform_log.csv` by default. |
 | `clock.py` | `SystemClock` provides aware UTC time, monotonic time, and sleep. |
-| `config/settings.py` | Environment-backed settings, including approval timeout, cleanup policy, API key, request-size limit, and PostgreSQL DSN/TLS/timeouts. |
+| `config/settings.py` | Environment-backed settings, including approval timeout, cleanup policy, API key, request-size limit, PostgreSQL DSN/TLS/timeouts, and Ollama model/URL/timeout. |
 | `database/config.py` | `PostgresConfig` and SSL mode/root-certificate validation without driver imports. |
 | `database/postgres.py` | `PostgresDatabase` / `PostgresSession`: psycopg sessions, TLS, timeouts, parameterized SQL, commit/rollback, sanitized driver errors. |
 | `interpreter/registry_step_runner.py` | Registry function resolution + sandbox execution + DataFrame plumbing. |
 | `logging/run_log.py` | Process-local structured lifecycle log. |
+| `logging/jsonl.py` | `JsonlRunLog`: redacted JSONL per run, in-memory reads, stderr fallback. |
+| `logging/transform_csv.py` | `CsvTransformLog`: transform CSV with JSON fields, redaction, formula-injection neutralization, stderr fallback. |
 | `planning/deterministic.py` | Deterministic `PlanIntakePort` fake for tests and local development. |
 | `planning/submitted.py` | `SubmittedPlanIntake` / factory for API-supplied plans. |
+| `planning/ollama.py` | `OllamaPlanSynthesizer`: local `/api/chat` call, timeout/error mapping, strict schema, draft parsing. |
+| `planning/draft_schema.py` | Strict Pydantic parser for model drafts; step-ID assignment and optional-parameter normalization. |
+| `planning/source_schema.py` | `WorkspaceSourceSchemaProbe`: bounded first-chunk column/dtype inspection. |
 | `scheduling/thread_pool.py` | Bounded background thread-pool scheduler for run execution. |
 | `state/run_checkpoint.py` | Process-local run snapshots. |
 | `state/checkpointing.py` | LangGraph `InMemorySaver` factory for future graph workflows; not wired into the app. |
@@ -488,6 +542,18 @@ The transformation adapters are copy-on-write, deterministic, and raise structur
 Every transformation must consume the pipeline DataFrame, be idempotent, and declare no side
 effects. `filter_rows`, coercing date normalization, and nulling replacement are destructive
 and require approval.
+
+### Monitoring (`application/logging/`, `infrastructure/logging/`)
+
+`JsonlRunLog` wraps an `InMemoryRunLog`. Every event is redacted and appended to
+`logs/<run_id>.jsonl`; the in-memory copy serves `GET /runs/{id}/logs`. If the file cannot be
+written, the event is printed to stderr and the run continues. `CsvTransformLog` writes one row
+per transformation step to `artifacts/<run_id>/transform_log.csv`, JSON-encodes result/error/
+warnings, prefixes formula-like cells, and falls back to stderr on failure.
+
+`ExecutePlanUseCase` emits source/step/destination events and passes `run_id` through
+`ExecutionPort`. `FilesystemCleanup` preserves `transform_log.csv` while removing other partial
+artifacts. Log rotation, retention, and cross-process locking are deferred (`MON-2`).
 
 ### Loaders (`infrastructure/loaders/`)
 
@@ -610,8 +676,8 @@ ProfileSourceUseCase.execute(chunks, request)
 |---|---|
 | `app.py` | Creates the FastAPI app, installs error handlers, request-size/optional API-key middleware, health router, and run router. |
 | `routes/health.py` | Returns service metadata. Health is currently a constant `ok`; dependency probes can be added later. |
-| `routes/runs.py` | `POST /runs`, `GET /runs/{id}`, confirm, approve, cancel, and logs endpoints. |
-| `schemas/runs.py` | Strict request schemas plus run/plan/assessment/result/cleanup/log/error response schemas. |
+| `routes/runs.py` | `POST /runs`, `GET /runs/{id}`, confirm, messages, approve, cancel, and logs endpoints. |
+| `schemas/runs.py` | Strict request schemas plus run/plan/assessment/result/cleanup/log/error response schemas, including `RunMessageRequest` and structured log errors. |
 | `schemas/health.py` | Strict health response schema. |
 | `errors.py` | Maps `EtlError`, request-validation failures, HTTP errors, and unexpected exceptions to `{code, message, retryable, details?}`. |
 
@@ -622,12 +688,14 @@ API behavior:
   `awaiting_clarification` with an assessment and `next_action: "confirm"`.
 - `POST /runs/{id}/confirm` supplies the missing destination, builds and validates the pipeline
   plan, rejects source overwrite, and moves the run to `awaiting_approval`.
-- Message-only requests without `source` or `plan` return `awaiting_clarification` until an
-  intent parser is configured.
+- Message-only requests use `NaturalLanguagePlanIntake` when Ollama is configured. It asks for
+  missing source/destination and can continue through `POST /runs/{id}/messages`. Without a
+  model, the request returns `awaiting_clarification` with the submitted-plan fallback.
 - Ready runs are submitted to `BackgroundSchedulerPort`; approval-gated runs are submitted
   after a successful approval.
-- `RunManager` keeps per-run workflows (which own their cancellation tokens), outcomes, and
-  logs in process memory. `RunCheckpointPort` stores run snapshots, not execution results.
+- `RunManager` keeps per-run workflows (which own their cancellation tokens), outcomes,
+  conversations, and in-memory log entries in process memory. `RunCheckpointPort` stores run
+  snapshots, not execution results. JSONL/CSV monitoring files survive a restart.
 - Responses expose result status, output count, data availability, and sanitized step errors;
   raw DataFrames are not serialized.
 - `AGENT_ETL_API_KEY` optionally protects `/runs`; `/health` stays public.
@@ -636,16 +704,55 @@ API behavior:
 
 ## 11. End-to-end flows
 
+### Natural-language run
+
+```text
+POST /runs {message, source, destination}
+  -> RunManager selects NaturalLanguagePlanIntake when no plan is supplied
+  -> NaturalLanguagePlanIntake.request
+       -> bind source/destination by extension (ask if missing/unsupported)
+       -> WorkspaceSourceSchemaProbe.inspect(source)  # 50-row schema sample
+       -> OllamaPlanSynthesizer.synthesize(...)
+            -> PlanPromptBuilder (rules, paths, schema, registry catalog)
+            -> POST http://127.0.0.1:11434/api/chat
+            -> parse_plan_draft -> PlanDraft
+       -> bind explicit source/destination and assign step IDs
+       -> PydanticPlanParser.parse(...)
+  -> RunIntakeCoordinator validates
+       -> invalid: previous_error -> another bounded synthesis attempt
+       -> questions: awaiting_clarification
+       -> valid: awaiting_approval
+  -> approval -> background execution -> logs/output
+```
+
+```text
+POST /runs/{id}/messages {message, source?, destination?}
+  -> RunManager.message(run_id, ...)
+       -> RunWorkflow.get() -> require live workflow
+       -> reject assessment runs (use /confirm)
+       -> PlanRequest(run_id, thread_id, mode, new message, paths)
+       -> RunWorkflow.resume(request)
+            -> same NaturalLanguagePlanIntake keeps bounded history
+            -> valid -> awaiting_approval; questions -> awaiting_clarification
+       -> ready? schedule
+```
+
 ### Execute a validated plan directly
 
 ```text
 caller
-  -> ExecutePlanUseCase.execute(plan)
+  -> ExecutePlanUseCase.execute(plan, run_id=...)
        -> PlanValidator.validate(plan)
+       -> JsonlRunLog: source_started/finished
        -> RegistryStepRunner.run_source(...)
             -> ModuleRegistry.function_for(...)
             -> SandboxExecutor.run(...)
-       -> RegistryStepRunner.run_transformation(...) for each step
+       -> for each step:
+            -> JsonlRunLog: step_started
+            -> RegistryStepRunner.run_transformation(...)
+            -> CsvTransformLog: one row
+            -> JsonlRunLog: step_finished/failed
+       -> JsonlRunLog: destination_started/finished
        -> RegistryStepRunner.run_destination(...)
        -> PlanExecutionResult
 ```
@@ -715,7 +822,9 @@ POST /runs
        -> PydanticPlanParser.parse(payload)
        -> PlanValidator.validate(plan)
        -> resolve run_id/mode
-       -> source-only? AssessmentPlanIntakeFactory : SubmittedPlanIntakeFactory
+       -> source-only? AssessmentPlanIntakeFactory
+       -> no plan + Ollama? NaturalLanguagePlanIntakeFactory
+       -> otherwise SubmittedPlanIntakeFactory
        -> RunWorkflowFactory.create(intake, cancellation token)
        -> RunWorkflow.start(request)
        -> RunManager stores workflow + RunOutcome
@@ -733,6 +842,14 @@ GET /runs/{id}
        -> live RunWorkflow.get() or stored RunOutcome
   -> RunResponse.from_outcome(...)
 
+POST /runs/{id}/messages
+  -> RunManager.message(run_id, message, source?, destination?)
+       -> reject assessment runs; require a live workflow
+       -> RunWorkflow.resume(PlanRequest(...))
+       -> valid -> awaiting_approval; questions -> awaiting_clarification
+       -> ready? schedule background execution
+  -> RunResponse.from_outcome(...)
+
 POST /runs/{id}/approve
   -> RunManager.approve(run_id, approved)
        -> RunWorkflow.approve(...)
@@ -746,8 +863,12 @@ POST /runs/{id}/cancel
 
 GET /runs/{id}/logs
   -> RunManager.logs(run_id)
-       -> RunLogPort.entries(run_id)
+       -> JsonlRunLog.entries(run_id)  # redacted in-memory entries
   -> RunLogsResponse
+
+On disk:
+  logs/<run_id>.jsonl                       # lifecycle + step events
+  artifacts/<run_id>/transform_log.csv      # one row per transformation
 ```
 
 ## 12. Extension points
@@ -759,6 +880,11 @@ GET /runs/{id}/logs
 - **Add a file destination:** implement an overwrite loader using `loaders/atomic.py`, add a
   `ModuleSpec` with a path constraint and side effects, bind it in
   `infrastructure/registry/bindings.py`, and verify it under the sandbox.
+- **Add a model provider:** implement `PlanSynthesizerPort` (for example OpenAI or another
+  local runtime), reuse `PlanPromptBuilder` and `build_plan_draft_schema`, and wire the factory
+  in `main.py`. Keep raw data out of prompts unless the user explicitly consents.
+- **Replace a monitoring sink:** implement `RunLogPort` and/or `TransformLogPort` and wire the
+  adapter in `main.py`; keep the in-memory log available for `GET /runs/{id}/logs`.
 - **Add a validation rule:** implement `PlanValidationCheck`, add it to
   `build_default_checks`, and add tests for its stable error code.
 - **Replace persistence:** implement `RunCheckpointPort` (for example PostgreSQL) and wire it

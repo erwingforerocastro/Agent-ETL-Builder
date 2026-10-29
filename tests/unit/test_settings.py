@@ -20,6 +20,9 @@ def test_from_env_uses_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AGENT_ETL_DATABASE_STATEMENT_TIMEOUT_MS", raising=False)
     monkeypatch.delenv("AGENT_ETL_DATABASE_APPLICATION_NAME", raising=False)
     monkeypatch.delenv("AGENT_ETL_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_ETL_OLLAMA_MODEL", raising=False)
+    monkeypatch.delenv("AGENT_ETL_OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("AGENT_ETL_OLLAMA_TIMEOUT_SECONDS", raising=False)
 
     settings = Settings.from_env()
 
@@ -36,6 +39,9 @@ def test_from_env_uses_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.database_statement_timeout_ms == 30_000
     assert settings.database_application_name == "agent-etl-builder"
     assert settings.api_key is None
+    assert settings.ollama_model is None
+    assert settings.ollama_base_url == "http://127.0.0.1:11434"
+    assert settings.ollama_timeout_seconds == 90
 
 
 def test_from_env_reads_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,6 +60,9 @@ def test_from_env_reads_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGENT_ETL_DATABASE_STATEMENT_TIMEOUT_MS", "15000")
     monkeypatch.setenv("AGENT_ETL_DATABASE_APPLICATION_NAME", "custom-agent")
     monkeypatch.setenv("AGENT_ETL_API_KEY", "secret-key")
+    monkeypatch.setenv("AGENT_ETL_OLLAMA_MODEL", "llama3.1:8b")
+    monkeypatch.setenv("AGENT_ETL_OLLAMA_BASE_URL", "http://127.0.0.1:11434/")
+    monkeypatch.setenv("AGENT_ETL_OLLAMA_TIMEOUT_SECONDS", "42.5")
 
     settings = Settings.from_env()
 
@@ -69,6 +78,9 @@ def test_from_env_reads_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.database_statement_timeout_ms == 15_000
     assert settings.database_application_name == "custom-agent"
     assert settings.api_key == "secret-key"
+    assert settings.ollama_model == "llama3.1:8b"
+    assert settings.ollama_base_url == "http://127.0.0.1:11434"
+    assert settings.ollama_timeout_seconds == 42.5
     assert "secret" not in repr(settings)
 
 
@@ -194,3 +206,43 @@ def test_rejects_non_positive_approval_timeout() -> None:
             environment="local",
             approval_timeout_seconds=0,
         )
+
+
+def test_rejects_blank_ollama_model() -> None:
+    with pytest.raises(ValueError, match="ollama_model"):
+        Settings(
+            service_name="service",
+            version="1.0.0",
+            environment="local",
+            ollama_model=" ",
+        )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "ftp://127.0.0.1:11434",
+        "http://user:secret@127.0.0.1:11434",
+        "not-a-url",
+        "",
+    ],
+)
+def test_rejects_invalid_ollama_base_url(base_url: str) -> None:
+    with pytest.raises(ValueError, match="ollama_base_url"):
+        Settings(
+            service_name="service",
+            version="1.0.0",
+            environment="local",
+            ollama_base_url=base_url,
+        )
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "0", "-1", "inf"])
+def test_from_env_rejects_invalid_ollama_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("AGENT_ETL_OLLAMA_TIMEOUT_SECONDS", value)
+
+    with pytest.raises(ValueError, match="AGENT_ETL_OLLAMA_TIMEOUT_SECONDS"):
+        Settings.from_env()

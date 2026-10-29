@@ -1,7 +1,7 @@
 # Agent ETL Builder - Architecture
 
-Version: 2.0
-Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, ASM-1, API-1, TRN-0, TRN-1, and LOD-1 implemented; MON-1 next
+Version: 2.1
+Status: beta 0.2.0b1; NL-1, API-2, MON-1, and BETA-1 implemented; TST-1 partial
 Last updated: 2026-10-29
 Scope: Module organization and runtime boundaries.
 
@@ -33,6 +33,16 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   contract, paths, limits, security, and approval. Policy checks live in
   `application/validation`; Pydantic parsing, plan size measurement, and filesystem probing
   are infrastructure adapters.
+- Natural-language planner: `NaturalLanguagePlanIntake` implements `PlanIntakePort`. It binds
+  source/destination operations deterministically from file extensions, samples a bounded
+  source schema through `WorkspaceSourceSchemaProbe`, asks for missing paths, and calls a
+  `PlanSynthesizerPort`. The beta adapter is `OllamaPlanSynthesizer`; it sends the message,
+  paths, registry metadata, and sampled column names/dtypes to a local Ollama server. The
+  model output is constrained by a JSON schema derived from the transformation registry, parsed
+  into a `PlanDraft`, assigned step IDs, bound to the explicit I/O paths, and validated by the
+  normal plan validator. Validation errors are fed back for bounded repair. No raw source values
+  are sent. Background generation, inline path detection, full-schema planning, remote
+  providers, and persistent conversations are deferred to v2.
 - Source assessor: `AssessSourceUseCase` resolves a workspace file through a reader port,
   profiles the full source through `ProfileSourceUseCase`, and derives issues, assumptions,
   selected metrics, missing inputs, and a conservative draft plan. It runs under the sandbox
@@ -81,19 +91,27 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   sizes, and full rollback on batch failure. It requires an existing table and is not registered
   as a plan destination until a configured-connection sandbox policy exists (`DB-2`). Table
   creation, schema mapping, file append/compression, and load lineage are deferred.
-- Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
+- Monitoring: `JsonlRunLog` appends redacted lifecycle and step events to
+  `logs/<run_id>.jsonl` while keeping redacted in-memory entries for the API.
+  `CsvTransformLog` writes one row per transformation step to
+  `artifacts/<run_id>/transform_log.csv`, neutralizes formula-like cells, and preserves the file
+  during cleanup. Both adapters fall back to stderr if their file cannot be written. Log
+  rotation, retention, and cross-process locking are deferred.
 - State and lineage: local in-memory run checkpoints with plan, assessment, approval, hash,
-  status, and error state. The API manager keeps execution results in process memory.
-  Transform/execution logs and full artifact lineage are implemented with MON-1.
-- Agent workflow: a plain application state machine, one instance per run. It bounds plan
-  intake/clarification, validation, approval, execution, retry, cancellation, and cleanup.
-  External effects are ports; run snapshots are saved after every transition.
+  status, and error state. The API manager keeps execution results and conversation state in
+  process memory. JSONL/CSV monitoring files persist on disk, but runs cannot resume after a
+  restart. Full artifact lineage and load manifests remain `LOD-5`.
+- Agent workflow: a plain application state machine, one instance per run. It selects
+  assessment, natural-language, or submitted-plan intake; bounds clarification, validation,
+  approval, execution, retry, cancellation, and cleanup; and resumes clarification through
+  `POST /runs/{run_id}/messages`. External effects are ports; run snapshots are saved after
+  every transition. LangGraph remains installed but is not wired into the runtime.
 - Profiling artifacts: per-chunk records, `quality.csv`, and `info.json` are written below
   `artifacts/<run_id>/`. The source is never mutated. Metrics carry stable formulas and
   definition versions; `accuracy` is `N/A` until a formula/reference rules are supplied.
   Reports and sampling are deferred to the v2 backlog.
-- API: FastAPI routes for run creation/status, assessment confirmation, approval,
-  cancellation, lifecycle logs, and health. A `RunManager` owns per-run workflow instances
+- API: FastAPI routes for run creation/status, assessment confirmation, clarification
+  follow-ups, approval, cancellation, lifecycle/step logs, and health. A `RunManager` owns per-run workflow instances
   (each with its cancellation token), selects assessment or submitted-plan intake, schedules
   execution on a background thread pool, and keeps process-local outcomes and logs. Pydantic
   plan payloads are parsed by an infrastructure adapter; invalid plans are rejected before a

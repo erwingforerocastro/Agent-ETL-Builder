@@ -13,4 +13,5 @@ class ExecutionPort(Protocol):
         plan: ExecutionPlan,
         *,
         cancellation: CancellationTokenPort | None = None,
+        run_id: str | None = None,
     ) -> PlanExecutionResult: ...

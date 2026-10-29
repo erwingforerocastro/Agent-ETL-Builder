@@ -1,9 +1,10 @@
 # Agent ETL Builder - Research / Ground Truth
 
-Version: 1.3
+Version: 2.0
 Last verified: 2026-10-29
-Verified code commit: `a64ba9e` (LOD-1 atomic and transactional loaders; local `main`)
-Verified baseline: 665 passed, 3 skipped, 90.49% coverage; ruff, format, mypy, lock, and sync clean.
+Verified code commit: beta `0.2.0b1` (local `main`)
+Verified baseline: 778 passed, 5 skipped, 90.22% coverage; ruff, format, mypy, lock, and sync clean.
+Optional live Ollama evaluation: 2 passed with `AGENT_ETL_TEST_OLLAMA=1`.
 
 Purpose: explain how the project actually works today, not how it is planned to work.
 Code and passing tests are authoritative. Planning documents may describe intended behavior.
@@ -16,28 +17,33 @@ file and the code disagree, the code is correct and this file is stale.
 
 Agent ETL Builder is a local FastAPI service that executes structured, validated ETL plans built
 from a fixed allowlist of pandas functions. It can also inspect a workspace data file, return an
-assessment report, and confirm that report into a pipeline plan.
+assessment report, confirm that report into a pipeline plan, and use a local Ollama model to turn
+a natural-language request into a validated plan.
 
-It is **not yet an LLM-driven agent**:
+The beta is a **deterministic validated-plan engine with a local LLM intake**:
 
-- no natural-language plan generation;
-- no LangGraph graph or agent loop wired into the application;
-- no model provider or tool-calling integration;
+- the model produces only a transformation draft, constrained by a registry-derived JSON schema;
+- source and destination operations are bound deterministically from explicit file extensions;
+- the existing plan validator is the final gate;
+- execution still runs only validated plans through the allowlisted interpreter;
 - LangGraph is installed and `infrastructure/state/checkpointing.py` exposes an `InMemorySaver`
-  adapter, but the run workflow does not use it.
+  adapter, but the run workflow does not use it;
+- there is no remote model provider, tool-calling loop, or generated-code execution.
 
-The current "agent" behavior is deterministic routing:
+Supported entry paths:
 
 ```text
 structured plan -> validate -> approval? -> execute
 source only     -> assess  -> confirm destination -> validate -> approval? -> execute
+message + paths -> bind -> sample schema -> Ollama draft -> validate/repair -> approval? -> execute
 ```
 
 Delivery status from `documents/backlog.txt`:
 
 - Done: DOC-1, FND-1, ST-1, DB-1, REG-1, PLN-1, EXE-1, WF-1, ING-1, PRF-1, ASM-1,
-  API-1, TRN-0, TRN-1, LOD-1.
-- Pending: MON-1, TST-1.
+  API-1, TRN-0, TRN-1, LOD-1, NL-1, API-2, MON-1, BETA-1.
+- Partial: TST-1 (the beta has unit, integration, security, regression, golden-plan, and
+  optional live Ollama coverage, but not the full edge-case matrix).
 
 ## 2. Runtime in one picture
 
@@ -51,18 +57,22 @@ uvicorn main:app
   |
   +-- RunManager (one per process)
   |     +-- parse plan -> PlanValidator
-  |     +-- choose intake: assessment or submitted plan
+  |     +-- choose intake: assessment, natural-language, or submitted plan
   |     +-- RunWorkflow (one instance per run; run state machine)
   |     +-- ThreadPoolRunScheduler (4 workers) -> background execution
-  |     +-- InMemoryRunCheckpoint, InMemoryRunLog, in-memory outcomes
+  |     +-- InMemoryRunCheckpoint, JsonlRunLog over InMemoryRunLog, in-memory outcomes
   |
   +-- ExecutePlanUseCase -> RegistryStepRunner -> ModuleRegistry
   |                                              -> SandboxExecutor
   |                                              -> allowlisted pandas function
+  |                    -> JsonlRunLog + CsvTransformLog
   |
   +-- AssessSourceUseCase -> WorkspaceSourceReader
                            -> ProfileSourceUseCase -> PandasChunkProfiler
                                                    -> FilesystemProfileWriter
+  |
+  +-- NaturalLanguagePlanIntake -> WorkspaceSourceSchemaProbe
+                               -> OllamaPlanSynthesizer -> local Ollama /api/chat
   |
   +-- PostgresTableLoader (adapter only; not a registry destination)
 ```
@@ -70,12 +80,14 @@ uvicorn main:app
 `src/main.py` is the only composition root. It sets:
 
 - workspace = `Path.cwd()`;
-- artifacts root = `<cwd>/artifacts`;
+- artifacts root = `<cwd>/artifacts`; logs root = `<cwd>/logs`;
 - registry = `MODULE_SPECS` plus `MODULE_FUNCTIONS`;
 - default sandbox = 60 seconds, 512 MB, no network, workspace-only;
-- four background workers.
+- four background workers;
+- `OllamaPlanSynthesizer` and `NaturalLanguagePlanIntake` only when
+  `AGENT_ETL_OLLAMA_MODEL` is set.
 
-## 3. The two supported entry paths
+## 3. The three supported entry paths
 
 ### A. Structured plan
 
@@ -98,7 +110,7 @@ The request must contain `message` or `plan`.
 The request supplies `source` and no `plan` or `destination`. The API schema still requires
 `message` or `plan`, so a source-only request needs a `message` (for example, "Assess this file").
 
-1. `RunManager` selects `AssessmentPlanIntake` instead of `SubmittedPlanIntake`.
+1. `RunManager` selects `AssessmentPlanIntake` instead of submitted or natural-language intake.
 2. `WorkspaceSourceReader` resolves a workspace-confined file and hashes its bytes.
 3. `AssessSourceUseCase` runs a full scan in chunks inside the sandbox.
 4. `ProfileSourceUseCase` writes per-chunk records, a quality CSV, and an info JSON.
@@ -114,25 +126,64 @@ Supported source files: `.csv`, `.json`, `.jsonl`, `.ndjson`, `.parquet`, `.pq`.
 `mode: "assessment"` is inspection only: it returns the report, reports
 `next_action: "provide_plan"`, and `confirm` returns `409`.
 
-A request with `source` **and** `destination` but no plan is not source-only. It falls through to
-submitted intake and asks for a plan.
+### C. Natural-language pipeline
 
-Inline source paths inside message text are not detected. `source` must be explicit.
+This path is active when `AGENT_ETL_OLLAMA_MODEL` is set.
+
+1. `RunManager` selects `NaturalLanguagePlanIntake` when no plan is supplied and the request is
+   not source-only.
+2. The intake binds source and destination operations from the explicit path extensions:
+   `.csv` -> `read_csv`/`save_csv`, `.json` -> `read_json`/`save_json`,
+   `.jsonl`/`.ndjson` -> `read_jsonl`/`save_jsonl`, `.parquet`/`.pq` -> `read_parquet`/`save_parquet`.
+3. Missing or unsupported paths become clarification questions. A destination that normalizes to
+   the source path is rejected with a question.
+4. `WorkspaceSourceSchemaProbe` reads the first 50 rows through `WorkspaceSourceReader` and keeps
+   only column names and dtypes. Source values are not sent to the model.
+5. `OllamaPlanSynthesizer` sends a system prompt, conversation history, source/destination paths,
+   the sampled schema, and a registry-derived JSON schema to `POST /api/chat` with
+   `stream=false`, `format=<schema>`, `temperature=0`, and a bounded `num_predict`.
+6. The model returns `name`, `description`, `transformations`, `questions`, and
+   `missing_inputs`. It cannot output source/destination operations, step IDs, unknown
+   operations, or extra parameters.
+7. The intake assigns `s1..sn`, removes empty/None optional parameters, binds the explicit
+   source/destination, and parses the full plan.
+8. `RunIntakeCoordinator` validates the plan. A validation failure is fed back to the model as
+   `previous_error`; the attempt budget is the normal 3 clarification attempts. Exhaustion
+   terminates the run with the validation error.
+9. A valid plan moves to `awaiting_approval`. Approval executes it through the sandbox.
+10. If the model asks for columns or values, the run stays in `awaiting_clarification` with
+    `next_action: "clarify"`. `POST /runs/{id}/messages` resumes the same intake with a bounded
+    12-turn history.
+
+The model is local-only in the beta. Plan generation is synchronous and usually takes 15-45
+seconds with `llama3.1:8b`. If Ollama is unavailable, times out, returns HTTP errors, invalid
+JSON, empty content, or an oversized response, the run terminates with a `PlanSynthesisError`
+code such as `PLAN_SYNTHESIS_UNAVAILABLE`, `PLAN_SYNTHESIS_TIMEOUT`, or
+`PLAN_SYNTHESIS_INVALID`.
+
+A request with `source` and `destination` but no plan is handled by the natural-language intake.
+A path mentioned only inside message text is not detected; `source` and `destination` must be
+explicit.
 
 ## 4. Actual HTTP API
 
 | Method | Path | Behavior |
 |---|---|---|
-| `POST` | `/runs` | Create a run from a message and/or plan. Returns `201`. |
+| `POST` | `/runs` | Create a run from a message, source-only request, natural-language request, and/or plan. Returns `201`. |
 | `GET` | `/runs/{run_id}` | Current run state, plan, assessment, result, cleanup, next action. |
 | `POST` | `/runs/{run_id}/confirm` | Supply a destination for an assessment draft. |
+| `POST` | `/runs/{run_id}/messages` | Continue a clarification run with `{"message": "..."}` and optional `source`/`destination`. |
 | `POST` | `/runs/{run_id}/approve` | `{"approved": true\|false}`. |
 | `POST` | `/runs/{run_id}/cancel` | Cancel at the next safe boundary. |
-| `GET` | `/runs/{run_id}/logs` | Process-local lifecycle events. |
+| `GET` | `/runs/{run_id}/logs` | Redacted in-memory lifecycle and step events. |
 | `GET` | `/health` | Service metadata; public even when an API key is configured. |
 
-There is **no resume endpoint**. A clarification run cannot receive new plan input through the
-API; the only API continuation is assessment confirmation. A new request creates a new run.
+`next_action` is one of `provide_plan`, `clarify`, `confirm`, `approve`, `wait`, or `none`.
+`clarify` means the client should send `POST /runs/{id}/messages`; assessment pipeline runs use
+`confirm`; assessment-only runs use `provide_plan`.
+
+There is no generic resume endpoint beyond `/messages` and assessment confirmation. A run whose
+workflow is lost on restart cannot be continued; create a new run.
 
 Errors use `{code, message, retryable, details?}`:
 
@@ -140,7 +191,10 @@ Errors use `{code, message, retryable, details?}`:
 - `RunNotFoundError` -> `404`;
 - conflicts such as invalid state, approval rejected/timeout, cancelled, stale plan -> `409`;
 - request validation -> `422`;
-- registry, sandbox, workflow, and unexpected errors -> `500`.
+- registry, sandbox, workflow, and unexpected errors -> `500`;
+- a `PlanSynthesisError` raised outside intake -> `503`. A synthesis failure during intake
+  terminates the run with the same error code and a `201` run response whose `status` is
+  `failed`.
 
 If `AGENT_ETL_API_KEY` is set, every `/runs` request needs `X-API-Key`; `/health` stays public.
 The request-size check only inspects the `Content-Length` header.
@@ -173,6 +227,10 @@ Registry version: `1.0.0`. Only these operations can appear in a plan:
 Startup rejects duplicate module names, a spec with no bound callable, and a bound callable with
 no spec. There are no database modules in the allowlist.
 
+The natural-language JSON schema is derived from this registry and contains only the ten
+transformation modules. It excludes source and destination operations, pipeline `df` inputs,
+path parameters, and any unknown properties.
+
 ## 6. Validation pipeline
 
 `PlanValidator` runs these checks in order:
@@ -191,8 +249,13 @@ no spec. There are no database modules in the allowlist.
    assessment plans may not contain them.
 
 Role and transformation-contract failures use `PLAN_INVALID_OPERATION_ROLE`,
-`PLAN_NON_IDEMPOTENT_TRANSFORMATION`, or `PLAN_INVALID_ARGUMENT`. Confirmation validates the
-generated plan again. Execution validates again before running.
+`PLAN_NON_IDEMPOTENT_TRANSFORMATION`, or `PLAN_INVALID_ARGUMENT`. Confirmation and natural-language
+intake validate the generated plan again. Execution validates again before running.
+
+Plan validation still cannot inspect the source schema. The natural-language prompt receives a
+50-row column/dtype sample, but column existence, dtype compatibility, and all-null behavior are
+checked by the transformation modules during execution. Plan-time schema-aware validation is
+deferred (`TRN-7`).
 
 ## 7. Run lifecycle
 
@@ -211,13 +274,14 @@ Approval states: `not_required`, `pending`, `approved`, `rejected`, `timed_out`,
 - `awaiting_approval` requires `pending`.
 - `ready` requires `not_required` or `approved`.
 - `rejected` requires `rejected`.
-- clarification is bounded to 3 attempts.
+- clarification is bounded to 3 attempts. `POST /runs/{id}/messages` resumes the same intake.
 - execution allows at most 2 retries after the first attempt, with backoff 0.5, 1.0, capped at
   5 seconds. Only errors marked retryable are retried.
 - cancellation is checked at approval, step, and retry boundaries. A running step is bounded by
   the sandbox timeout, not interrupted mid-step.
 - non-success terminal paths apply `AGENT_ETL_CLEANUP_POLICY`. The default `cleanup` removes
-  `artifacts/<run_id>`; `retain` keeps it. Successful runs keep their artifacts.
+  partial artifacts but preserves `artifacts/<run_id>/transform_log.csv`; `retain` keeps
+  everything. Successful runs keep their artifacts.
 
 ## 8. Assessment behavior
 
@@ -235,13 +299,18 @@ Approval states: `not_required`, `pending`, `approved`, `rejected`, `timed_out`,
 - No other transformation is proposed. The missing input is `destination`.
 - Assessment responses contain absolute artifact paths produced by the filesystem writer.
 
+The natural-language source schema probe is separate from assessment: it resolves the source,
+computes the normal content hash, and reads only a bounded first chunk for column names/dtypes.
+It does not profile or expose values. The full-file content hash can add latency on large
+sources.
+
 ## 9. State, artifacts, and logs
 
 - `InMemoryRunCheckpoint` stores immutable run snapshots in a process-local, thread-safe dict.
   Restart loses all runs.
-- `RunManager` also keeps workflows, outcomes, and a scheduled-id set in memory for the process
-  lifetime; there is no eviction or retention bound.
-- Artifacts:
+- `RunManager` also keeps workflows, outcomes, conversations, in-memory log entries, and a
+  scheduled-id set in memory for the process lifetime; there is no eviction or retention bound.
+- Profiling artifacts:
 
 ```text
 artifacts/<run_id>/<source_id>_<source_type>_quality.csv
@@ -249,14 +318,34 @@ artifacts/<run_id>/<source_id>_<source_type>_info.json
 artifacts/<run_id>/<source_id>_<source_type>_profile_chunk_<index>.json
 ```
 
+- Monitoring artifacts:
+
+```text
+logs/<run_id>.jsonl
+artifacts/<run_id>/transform_log.csv
+```
+
+- `JsonlRunLog` wraps `InMemoryRunLog`. Every event is redacted and appended to the JSONL file;
+  the in-memory copy serves `GET /runs/{id}/logs`. If the file cannot be written, the event is
+  printed to stderr and the run continues.
+- `CsvTransformLog` writes one row per transformation step with columns
+  `ID, Filename, Chunk, Prev_Step, Step, Date, Result, Error, Warnings`. Result/error/warnings are
+  JSON-encoded; cells beginning with `=`, `+`, `-`, `@`, tab, or carriage return are prefixed
+  with `'`; failures fall back to stderr.
+- `ExecutePlanUseCase` emits `source_started`, `source_finished`, `step_started`,
+  `step_finished`, `step_failed`, `destination_started`, and `destination_finished` events. It
+  passes `run_id` through `ExecutionPort`; event context contains row counts, durations, step
+  IDs, and sanitized errors, never raw rows.
+- Redaction covers secret-looking keys (`password`, `token`, `api_key`, `authorization`, `dsn`,
+  etc.), DSN credentials, bearer tokens, and `password=`-style assignments. It is applied to both
+  monitoring adapters.
 - Profiling artifact writes use a temporary file plus replace. `save_csv`, `save_json`,
   `save_jsonl`, and `save_parquet` use the same atomic temp-file-plus-replace mechanism.
 - `PostgresTableLoader` is an adapter with transactional insert/upsert/truncate-insert modes.
   It requires an existing table and is not exposed as a plan destination because registry
   execution still denies network access.
-- Logs are lifecycle events only (`run_created`, `run_started`, `run_finished`,
-  approval/confirm/cancel events, scheduling failures). Transform CSV and execution JSONL logs
-  are not implemented.
+- Log rotation, retention, and cross-process locking are not implemented; the beta assumes one
+  writer per run.
 - The LangGraph `InMemorySaver` adapter exists but is not used by the application.
 
 ## 10. Configuration and defaults
@@ -277,9 +366,13 @@ Environment variables read by `Settings.from_env()`:
 | `AGENT_ETL_DATABASE_CONNECT_TIMEOUT_SECONDS` | package default | Connection timeout. |
 | `AGENT_ETL_DATABASE_STATEMENT_TIMEOUT_MS` | package default | Statement timeout. |
 | `AGENT_ETL_DATABASE_APPLICATION_NAME` | package default | PostgreSQL application name. |
+| `AGENT_ETL_OLLAMA_MODEL` | unset | Model name; unset disables natural-language planning. |
+| `AGENT_ETL_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP endpoint; no credentials. |
+| `AGENT_ETL_OLLAMA_TIMEOUT_SECONDS` | `90` | Plan-generation request timeout. |
 
 The workspace and sandbox limits are not environment-configurable in the current composition
-root. The workspace is the process working directory.
+root. The workspace is the process working directory. The beta was validated with
+`llama3.1:8b`; `qwen2.5-coder:1.5b` is faster but less reliable for plan shape.
 
 Run:
 
@@ -287,19 +380,42 @@ Run:
 uv run uvicorn --app-dir src main:app --reload
 ```
 
+Beta smoke test:
+
+```powershell
+uv run python scripts/beta_smoke.py
+```
+
 ## 11. Verified gaps and limitations
+
+Natural-language planning:
+
+- Local Ollama only; there is no OpenAI or other remote provider, tool-calling loop, or model
+  fallback.
+- Plan generation is synchronous inside `POST /runs` and usually takes 15-45 seconds with
+  `llama3.1:8b`. There is no generating state or background job.
+- The source schema is sampled from the first 50 rows. It is prompt context, not a plan-time
+  schema contract; column/dtype errors are caught during execution.
+- Source and destination must be explicit fields. Inline path extraction from message text is
+  not implemented.
+- Conversations are process-local, bounded to 12 turns, and lost on restart. A workflow cannot
+  be resumed after a process restart.
+- The model can still choose a valid but semantically wrong transformation. The approval step is
+  the human control; there is no plan-quality evaluator beyond validation.
+- Prompt injection and plan-quality regression tests are present but not exhaustive.
+- No per-run model/prompt version or token/cost lineage is recorded.
 
 Planning and API:
 
-- No LLM, prompt, model provider, or natural-language plan builder is wired.
 - No LangGraph graph/tool loop; only the unused checkpoint adapter exists.
 - No Python project or code export; optional fixed-template export is deferred (`EXP-1`).
-- Message-only requests return `awaiting_clarification`; there is no resume endpoint.
 - Source-only requests need an explicit `source` plus a `message`; inline paths are not parsed.
 - Profiling is only reachable through assessment; there is no standalone profiling endpoint.
 - Confirmation accepts only a destination. Draft transformations cannot be edited and only
   `save_csv` is supported.
 - Assessment-only mode cannot be confirmed into a pipeline.
+- `next_action` is `clarify` for clarification runs; clients must use `/messages`, not a generic
+  resume endpoint.
 
 Execution and data:
 
@@ -321,7 +437,7 @@ Execution and data:
   and schema-drift handling are deferred (`LOD-3`). It is not a registry destination because
   registry execution denies network access (`DB-2`).
 - Load lineage, checksums, and load artifacts under `artifacts/<run_id>/` are not implemented;
-  monitoring and lineage are deferred to `MON-1`/`LOD-5`.
+  they are deferred to `LOD-5`.
 - PostgreSQL read code exists, but no database module is in the registry allowlist. Registry
   execution also denies network access, so validated plans cannot read PostgreSQL yet (DB-2).
 - Assessment covers workspace files only; no database assessment.
@@ -331,13 +447,14 @@ Execution and data:
 
 Operations:
 
-- All run state, outcomes, logs, approval decisions, and scheduling are single-process and
-  in-memory. Multiple workers or a restart lose state and do not coordinate.
+- All run state, outcomes, conversations, in-memory logs, approval decisions, and scheduling are
+  single-process and in-memory. Multiple workers or a restart lose state and do not coordinate.
+- JSONL and transform CSV files persist, but there is no rotation, retention, or cross-process
+  locking.
 - Approval timeout is only enforced by `RunApprovalCoordinator.wait`, which runs when
   `RunWorkflow.run()` waits on a pending approval. The API schedules only `ready` runs, so a run
   left in `awaiting_approval` stays there until approved or cancelled; no API timer expires it.
   Tracked as `WF-2` in `documents/backlog_v2.txt`.
-- Logs contain lifecycle events only; no transform CSV or execution JSONL.
 - Rate limiting and CORS are not implemented. Authentication is a single optional API key.
 - The request-size check trusts the `Content-Length` header.
 - Execution responses do not include DataFrame rows; they expose `data_available` only.
@@ -360,19 +477,25 @@ uv lock --check
 uv sync --check
 ```
 
-Last result on 2026-10-29 at commit `a64ba9e`:
+Last result on 2026-10-29 for beta `0.2.0b1`:
 
-- `pytest`: 665 passed, 3 skipped, 18.71 s, coverage 90.49% (required 80%).
+- `pytest`: 778 passed, 5 skipped, 19.03 s, coverage 90.22% (required 80%).
 - `ruff check`: clean.
-- `ruff format --check`: 226 files already formatted.
-- `mypy`: no issues in 225 source files.
+- `ruff format --check`: 260 files already formatted.
+- `mypy`: no issues in 259 source files.
 - `uv lock --check` / `uv sync --check`: up to date, no changes.
-- Skips: one PostgreSQL TLS test because the temporary cluster had TLS enabled; two symlink
-  tests because symlinks are unavailable on the Windows runner.
+- Skips: the two live Ollama tests unless `AGENT_ETL_TEST_OLLAMA=1`; one PostgreSQL TLS test
+  because the temporary cluster had TLS enabled; two symlink tests because symlinks are
+  unavailable on the Windows runner.
+- Optional live Ollama run: 2 passed in 45.95 s with `AGENT_ETL_TEST_OLLAMA=1` and
+  `llama3.1:8b`.
+- Manual beta smoke: `scripts/beta_smoke.py` passed the natural-language, clarification, and
+  structured-plan flows against a local server.
 
 The test suite includes unit, integration, security, architecture, API, sandbox, PostgreSQL,
-profiling, assessment, and transformation coverage. `tests/architecture/test_dependency_rule.py`
-enforces the Dependency Rule and rejects import cycles.
+profiling, assessment, transformation, natural-language planning, monitoring, golden-plan, and
+optional live Ollama coverage. `tests/architecture/test_dependency_rule.py` enforces the
+Dependency Rule and rejects import cycles.
 
 ## 13. Source-of-truth map
 
@@ -384,9 +507,11 @@ enforces the Dependency Rule and rejects import cycles.
 | `README.md` | Setup, usage, API examples, feature descriptions. |
 | `documents/architecture.txt` | Intended layering and runtime boundaries. |
 | `documents/security.txt` | Security controls and threat assumptions. |
-| `documents/backlog.txt` | v1 scope and delivery status. |
+| `documents/backlog.txt` | Delivery scope and status. |
 | `documents/backlog_v2.txt` | Deferred work and known edge cases. |
 | `documents/requirements_agent.txt` | Product requirements and acceptance intent. |
+| `scripts/beta_smoke.py` | Manual end-to-end beta check. |
+| `examples/beta/` | Sample source and structured plan. |
 
 ## 14. Maintenance procedure
 
@@ -396,8 +521,9 @@ Update this file when any of these changes:
 - a run state, transition, approval rule, retry, or cleanup behavior;
 - a registry module, source format, loader, or transformation;
 - validation checks, limits, security rules, or path policy;
-- composition-root wiring, workspace/artifact location, sandbox limits, or settings;
+- composition-root wiring, workspace/artifact/log location, sandbox limits, or settings;
 - persistence, logging, scheduling, or concurrency behavior;
+- the natural-language provider, prompt, schema, model defaults, or repair policy;
 - implemented/deferred status of a backlog item;
 - dependencies, supported Python version, or verification baseline.
 

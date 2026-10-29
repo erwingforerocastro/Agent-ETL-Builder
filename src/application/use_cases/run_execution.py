@@ -76,7 +76,11 @@ class RunExecutionCoordinator:
             self._store.save(run)
 
             try:
-                result = self._executor.execute(plan, cancellation=self._cancellation)
+                result = self._executor.execute(
+                    plan,
+                    cancellation=self._cancellation,
+                    run_id=run.run_id,
+                )
             except RunCancelledError:
                 return self._cancelled(run)
             except SandboxError as exc:
