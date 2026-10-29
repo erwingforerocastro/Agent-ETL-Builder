@@ -2,7 +2,7 @@
 
 Version: 2.1
 Last verified: 2026-10-29
-Verified code commit: `0d07699` (beta `0.2.0b1`; local `main`, release tag pending)
+Verified code commit: `9352cd4` (beta `0.2.0b1`; local `main`, tagged `v0.2.0b1`)
 Verified baseline: 782 passed, 5 skipped, 90.24% coverage; ruff, format, mypy, lock, sync, and
 `uv build` clean.
 Optional live Ollama evaluation: 2 passed with `AGENT_ETL_TEST_OLLAMA=1`.
