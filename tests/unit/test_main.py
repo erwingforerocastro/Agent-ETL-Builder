@@ -6,6 +6,7 @@ from application.use_cases.run_manager import RunManager
 from application.validation.plan_validator import PlanValidator
 from infrastructure.approval.in_memory import InMemoryApprovalGateway
 from infrastructure.cleanup.filesystem import FilesystemCleanup
+from infrastructure.database.postgres import PostgresDatabase
 from infrastructure.logging.run_log import InMemoryRunLog
 from infrastructure.scheduling.thread_pool import ThreadPoolRunScheduler
 from infrastructure.state.run_checkpoint import InMemoryRunCheckpoint
@@ -51,3 +52,11 @@ def test_composition_root_wires_the_run_api() -> None:
     assert main.app.state.run_manager is main.run_manager
     assert main.app.state.run_log is main.run_log
     assert main.app.state.run_scheduler is main.run_scheduler
+
+
+def test_composition_root_wires_the_optional_database_adapter() -> None:
+    assert main.app.state.database is main.database
+    if main.settings.database_url is None:
+        assert main.database is None
+    else:
+        assert isinstance(main.database, PostgresDatabase)

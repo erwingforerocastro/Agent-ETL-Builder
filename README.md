@@ -3,12 +3,13 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, and WF-1 complete. Five transformations are
-registered in the versioned allowlist, structured plans are validated before execution, and
-the bounded run workflow handles intake, approval, execution, retries, cancellation, and
-cleanup. The FastAPI run contract exposes the workflow with background execution. The sandbox
-is an in-process guard; OS-level isolation and PostgreSQL adapters are not implemented yet.
-Additional transformation batches remain in progress.
+**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, and API-1 complete. Five
+transformations are registered in the versioned allowlist, structured plans are validated
+before execution, and the bounded run workflow handles intake, approval, execution, retries,
+cancellation, and cleanup. The FastAPI run contract exposes the workflow with background
+execution. PostgreSQL connectivity is available through a psycopg-backed adapter. The sandbox
+is an in-process guard; OS-level isolation remains deferred. Additional transformation batches
+remain in progress.
 
 ## Architecture
 
@@ -87,6 +88,12 @@ Settings come from environment variables:
 | `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS` | `300` | Positive number |
 | `AGENT_ETL_CLEANUP_POLICY` | `cleanup` | `cleanup`, `retain` |
 | `AGENT_ETL_MAX_REQUEST_BYTES` | `1000000` | Positive integer |
+| `AGENT_ETL_DATABASE_URL` | unset | Optional PostgreSQL DSN |
+| `AGENT_ETL_DATABASE_SSLMODE` | `prefer` | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` |
+| `AGENT_ETL_DATABASE_SSLROOTCERT` | unset | Optional CA certificate path for `verify-ca`/`verify-full` |
+| `AGENT_ETL_DATABASE_CONNECT_TIMEOUT_SECONDS` | `10` | Positive integer |
+| `AGENT_ETL_DATABASE_STATEMENT_TIMEOUT_MS` | `30000` | Positive integer |
+| `AGENT_ETL_DATABASE_APPLICATION_NAME` | `agent-etl-builder` | Non-blank string |
 | `AGENT_ETL_API_KEY` | unset | Optional API key for `/runs` |
 
 Copy `.env.example` values into your shell or a local `.env` loader. Never commit `.env`
@@ -103,6 +110,28 @@ saved after every transition, but the snapshot is lost when the process stops.
 - The LangGraph `InMemorySaver` factory remains available for future graph-based workflows
   but is not wired into the application composition root.
 - A persistent PostgreSQL checkpointer is deferred to a later version.
+
+## PostgreSQL connectivity
+
+`PostgresDatabase` opens transaction-scoped sessions through `psycopg`. It is wired lazily in
+the composition root when `AGENT_ETL_DATABASE_URL` is set; no connection is opened at startup.
+
+- All values use psycopg parameters; identifiers and SQL text remain the caller's
+  responsibility. Ingestion and loading modules will build and validate those statements.
+- Read-only sessions execute `SET TRANSACTION READ ONLY`; writable sessions commit on success
+  and roll back on any exception.
+- `statement_timeout` is applied per transaction, and connection attempts use the configured
+  connect timeout and application name.
+- TLS is controlled by `AGENT_ETL_DATABASE_SSLMODE`. Use `verify-full` with
+  `AGENT_ETL_DATABASE_SSLROOTCERT` in production; `prefer` is the local-development default.
+- Driver errors are wrapped as `IngestionError` (`DATABASE_READ_FAILED`) or `LoadError`
+  (`DATABASE_WRITE_FAILED`) with a stable code, SQLSTATE, and no DSN, SQL text, or parameter
+  values.
+
+Integration tests start a temporary PostgreSQL cluster and skip when server binaries are not
+available. Set `AGENT_ETL_TEST_PG_BIN` to a PostgreSQL `bin` directory to select a specific
+installation. TLS tests generate a short-lived self-signed certificate with OpenSSL; set
+`AGENT_ETL_TEST_OPENSSL` when OpenSSL is not on `PATH`.
 
 ## Implemented transformations
 
@@ -297,7 +326,9 @@ documents/
 
 ## Roadmap
 
-`EXE-1`, `WF-1`, and `API-1` are complete: plans are validated before execution, the sandbox
-enforces workspace, network, timeout, and memory limits, the workflow bounds clarification,
-approval, retries, cancellation, and cleanup, and the FastAPI run contract executes runs in
-the background. Additional `TRN-0` transformation batches remain in progress.
+`EXE-1`, `WF-1`, `DB-1`, and `API-1` are complete: plans are validated before execution, the
+sandbox enforces workspace, network, timeout, and memory limits, the workflow bounds
+clarification, approval, retries, cancellation, and cleanup, PostgreSQL sessions are
+parameterized and transaction-scoped, and the FastAPI run contract executes runs in the
+background. The next P1 backlog item is `ING-1` (ingestion adapters). Additional `TRN-0`
+transformation batches remain in progress.

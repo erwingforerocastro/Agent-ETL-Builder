@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.162.0",
     "langgraph>=1.2.18",
     "pandas>=3.1.0",
+    "psycopg[binary]>=3.2",
     "pydantic>=2.14.1",
     "uvicorn>=0.54.0",
 ]
@@ -60,6 +61,8 @@ known-first-party = ["application", "domain", "infrastructure", "interfaces", "m
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
+# Test clusters use discovered PostgreSQL binaries and generated, quoted identifiers.
+"tests/integration/test_postgres_connectivity.py" = ["S603", "S608"]
 
 [tool.mypy]
 python_version = "3.12"

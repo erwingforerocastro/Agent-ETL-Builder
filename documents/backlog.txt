@@ -1,8 +1,8 @@
 # Agent ETL Builder - Backlog
 
-Version: 1.1
-Status: API-1 complete; TRN-0 in progress
-Last updated: 2026-10-28
+Version: 1.2
+Status: DB-1 complete; ING-1 next; TRN-0 in progress
+Last updated: 2026-10-29
 
 Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 
@@ -11,7 +11,7 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 | DOC-1 | P0 | Documentation baseline | - | Architecture, security, and backlog exist and match requirements. | Done |
 | FND-1 | P0 | Project skeleton | DOC-1 | `src/` layers, `tests/`, `pyproject.toml`, README, lint, format, and type-check commands work. | Done |
 | ST-1 | P0 | Local-memory checkpointer | FND-1 | LangGraph in-memory checkpointer works; state is process-local; restart behavior is documented. | Done |
-| DB-1 | P1 | PostgreSQL connectivity | FND-1 | Connection, parameterized read/write, TLS configuration, and temporary test schema are tested. | Pending |
+| DB-1 | P1 | PostgreSQL connectivity | FND-1 | Connection, parameterized read/write, TLS configuration, and temporary test schema are tested. | Done |
 | REG-1 | P0 | Module registry | FND-1 | Versioned allowlist, signature-derived metadata, examples, and contract tests are in place. | Done |
 | PLN-1 | P0 | Plan schema and validator | REG-1 | Schema, argument, path, limit, security, and approval validation reject unsafe plans. | Done |
 | EXE-1 | P0 | Interpreter and sandbox | PLN-1, ST-1 | Only validated steps run; no generated code; timeout, memory, filesystem, and network limits are tested. | Done |
@@ -51,6 +51,14 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
   configured; API-1 exposes no resume endpoint.
 - `AGENT_ETL_API_KEY` optionally protects `/runs`; rate limiting and production auth
   hardening remain deployment controls.
+- PostgreSQL sessions open one connection per session; connection pooling, pool exhaustion
+  handling, server-side cursors/pagination, and read-only database credentials are
+  deployment or ING-1 concerns.
+- `AGENT_ETL_DATABASE_SSLMODE=prefer` is the local default and does not verify certificates.
+  Production deployments should use `verify-full` with `AGENT_ETL_DATABASE_SSLROOTCERT`.
+- PostgreSQL integration tests start a temporary local cluster and skip when server binaries
+  are unavailable. TLS tests use a short-lived OpenSSL-generated certificate and skip when
+  OpenSSL is unavailable.
 - Exact profiling metrics can exhaust memory; spill limits must be defined.
 - Sampling may miss rare issues; assessment scope and confidence must be visible.
 - Draft plans can remain incomplete until the destination is supplied.

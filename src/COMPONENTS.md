@@ -15,8 +15,8 @@ main (composition root) ----> interfaces + infrastructure
 - `domain/` contains enterprise rules and value objects. It imports no frameworks and no
   infrastructure.
 - `application/` contains use cases, ports, and policy. It imports `domain/` only.
-- `infrastructure/` contains mechanisms: pandas, files, sandbox, serialization, clocks,
-  persistence adapters.
+- `infrastructure/` contains mechanisms: pandas, PostgreSQL sessions, files, sandbox,
+  serialization, clocks, persistence adapters.
 - `interfaces/` contains FastAPI routes and response schemas.
 - `main.py` is the only place that constructs concrete adapters and wires them together.
 
@@ -29,6 +29,9 @@ and rejects import cycles.
 
 ```text
 Settings.from_env()
+  |
+  +--> PostgresDatabase(PostgresConfig(...)) when database_url is set
+  |       -> lazy PostgreSQL sessions (no startup connection)
   |
   +--> build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
   |       -> ModuleRegistry (validated snapshot + allowlisted callables)
@@ -74,7 +77,8 @@ Settings.from_env()
 A `RunWorkflow` instance is intentionally **not** shared between runs: it remembers one
 `run_id` and routes one lifecycle. `RunManager` creates a fresh workflow, a fresh
 cancellation token, and a fresh intake adapter for each run, then schedules execution when
-the run becomes `ready`.
+the run becomes `ready`. `app.state.database` exposes the optional database adapter for
+later ingestion/loading wiring.
 
 ## 3. Domain (`src/domain/`)
 
@@ -151,6 +155,8 @@ last column.
 | `CleanupPort` | Remove or retain partial run artifacts. | `FilesystemCleanup` |
 | `RunLogPort` | Append and read structured run events. | `InMemoryRunLog` |
 | `BackgroundSchedulerPort` | Submit run work outside the request thread. | `ThreadPoolRunScheduler` |
+| `DatabasePort` | Open a transaction-scoped read-only or writable session. | `PostgresDatabase` |
+| `DatabaseSessionPort` | Parameterized fetch/execute/execute-many operations. | `PostgresSession` |
 
 ## 5. Plan validation (`src/application/validation/`)
 
@@ -370,7 +376,9 @@ cleanup. Those are deployment-level hardening items.
 | `cancellation.py` | `EventCancellationToken` backed by `threading.Event`. |
 | `cleanup/filesystem.py` | Removes or retains `artifacts/<run_id>` with path-safety checks. |
 | `clock.py` | `SystemClock` provides aware UTC time, monotonic time, and sleep. |
-| `config/settings.py` | Environment-backed settings, including approval timeout, cleanup policy, API key, and request-size limit. |
+| `config/settings.py` | Environment-backed settings, including approval timeout, cleanup policy, API key, request-size limit, and PostgreSQL DSN/TLS/timeouts. |
+| `database/config.py` | `PostgresConfig` and SSL mode/root-certificate validation without driver imports. |
+| `database/postgres.py` | `PostgresDatabase` / `PostgresSession`: psycopg sessions, TLS, timeouts, parameterized SQL, commit/rollback, sanitized driver errors. |
 | `interpreter/registry_step_runner.py` | Registry function resolution + sandbox execution + DataFrame plumbing. |
 | `logging/run_log.py` | Process-local structured lifecycle log. |
 | `planning/deterministic.py` | Deterministic `PlanIntakePort` fake for tests and local development. |
@@ -388,6 +396,32 @@ cleanup. Those are deployment-level hardening items.
 | `transformations/` | Deterministic pandas transformations registered in the allowlist. |
 | `ingestion/csv.py` | CSV source adapter. |
 | `loaders/csv.py` | CSV destination adapter. |
+
+### PostgreSQL sessions (`infrastructure/database/`)
+
+```text
+DatabasePort.connect(read_only=...)
+  |
+  +-> psycopg.connect(dsn, sslmode, sslrootcert?, connect_timeout, application_name, row_factory)
+  +-> SET TRANSACTION READ ONLY when requested
+  +-> SELECT set_config('statement_timeout', <ms>, true)
+  |
+  v
+DatabaseSessionPort
+  +-> fetch_all(sql, params, max_rows?) -> QueryResult(columns, rows, truncated)
+  +-> execute(sql, params) -> rowcount
+  +-> execute_many(sql, rows) -> rowcount
+  |
+  v
+success -> commit; any exception -> rollback
+psycopg.Error -> IngestionError (read-only) or LoadError (writable)
+                 context: error_type, optional sqlstate; never DSN/SQL/values
+```
+
+`PostgresDatabase` is constructed in `main.py` only when `AGENT_ETL_DATABASE_URL` is set. The
+adapter does not connect at startup, so the API remains available without PostgreSQL. SQL
+text and identifiers remain the caller's responsibility; ingestion and loading modules must
+allowlist/quote identifiers and pass all values as parameters.
 
 ## 10. Interfaces (`src/interfaces/api/`)
 
@@ -496,6 +530,9 @@ GET /runs/{id}/logs
   `build_default_checks`, and add tests for its stable error code.
 - **Replace persistence:** implement `RunCheckpointPort` (for example PostgreSQL) and wire it
   in `main.py`; no workflow code changes are required.
+- **Add or replace a database adapter:** implement `DatabasePort`/`DatabaseSessionPort` (for
+  example MySQL or Oracle) and wire it in `main.py`; ingestion and loading callers stay on the
+  port. PostgreSQL configuration lives in `infrastructure/database/config.py`.
 - **Replace plan intake:** implement `PlanIntakePort` and `PlanIntakeFactoryPort`, then wire
   the factory into `RunManager`.
 - **Replace plan parsing:** implement `PlanParserPort` (for example a different schema

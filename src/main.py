@@ -13,6 +13,8 @@ from infrastructure.cancellation import EventCancellationToken
 from infrastructure.cleanup.filesystem import FilesystemCleanup
 from infrastructure.clock import SystemClock
 from infrastructure.config.settings import Settings
+from infrastructure.database.config import PostgresConfig
+from infrastructure.database.postgres import PostgresDatabase
 from infrastructure.interpreter.registry_step_runner import RegistryStepRunner
 from infrastructure.logging.run_log import InMemoryRunLog
 from infrastructure.planning.submitted import SubmittedPlanIntakeFactory
@@ -30,6 +32,20 @@ from interfaces.api.app import create_app
 
 workspace = Path.cwd()
 settings = Settings.from_env()
+database = (
+    PostgresDatabase(
+        PostgresConfig(
+            dsn=settings.database_url,
+            sslmode=settings.database_sslmode,
+            sslrootcert=settings.database_sslrootcert,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+            statement_timeout_ms=settings.database_statement_timeout_ms,
+            application_name=settings.database_application_name,
+        )
+    )
+    if settings.database_url is not None
+    else None
+)
 module_registry = build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
 plan_validator = PlanValidator(
     module_registry,
@@ -81,6 +97,7 @@ app = create_app(
     shutdown_callbacks=(run_scheduler.shutdown,),
 )
 app.state.module_registry = module_registry
+app.state.database = database
 app.state.plan_validator = plan_validator
 app.state.execute_plan = execute_plan
 app.state.run_checkpoint = run_checkpoint
