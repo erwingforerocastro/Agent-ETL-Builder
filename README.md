@@ -30,6 +30,9 @@ main (composition root) -> interfaces + infrastructure
 
 `tests/architecture/test_dependency_rule.py` enforces the layer direction.
 
+`documents/research.txt` records the verified current behavior, actual API surface, known gaps, and
+the last passing verification baseline. Update it whenever behavior changes.
+
 ## Requirements
 
 - Python 3.12+
@@ -421,6 +424,7 @@ tests/
   integration/
   unit/
 documents/
+  research.txt  # verified current behavior and verification baseline
 ```
 
 ## Roadmap

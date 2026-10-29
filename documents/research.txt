@@ -1,0 +1,375 @@
+# Agent ETL Builder - Research / Ground Truth
+
+Version: 1.0
+Last verified: 2026-10-29
+Verified code commit: `6cdb95e` (local `main`; documentation changes do not alter runtime behavior)
+Verified baseline: 515 passed, 3 skipped, 89.76% coverage; ruff, format, mypy, lock, and sync clean.
+
+Purpose: explain how the project actually works today, not how it is planned to work.
+Code and passing tests are authoritative. Planning documents may describe intended behavior.
+
+Maintenance: update this file in the same change whenever runtime behavior, wiring, boundaries,
+endpoints, registry modules, settings, persistence, or the verification baseline changes. If this
+file and the code disagree, the code is correct and this file is stale.
+
+## 1. What this project is today
+
+Agent ETL Builder is a local FastAPI service that executes structured, validated ETL plans built
+from a fixed allowlist of pandas functions. It can also inspect a workspace data file, return an
+assessment report, and confirm that report into a pipeline plan.
+
+It is **not yet an LLM-driven agent**:
+
+- no natural-language plan generation;
+- no LangGraph graph or agent loop wired into the application;
+- no model provider or tool-calling integration;
+- LangGraph is installed and `infrastructure/state/checkpointing.py` exposes an `InMemorySaver`
+  adapter, but the run workflow does not use it.
+
+The current "agent" behavior is deterministic routing:
+
+```text
+structured plan -> validate -> approval? -> execute
+source only     -> assess  -> confirm destination -> validate -> approval? -> execute
+```
+
+Delivery status from `documents/backlog.txt`:
+
+- Done: DOC-1, FND-1, ST-1, DB-1, REG-1, PLN-1, EXE-1, WF-1, ING-1, PRF-1, ASM-1, API-1.
+- In progress: TRN-0.
+- Pending: TRN-1, LOD-1, MON-1, TST-1.
+
+## 2. Runtime in one picture
+
+```text
+uvicorn main:app
+  |
+  +-- interfaces/api/app.py
+  |     +-- /health
+  |     +-- /runs ... -> application/use_cases/run_manager.py
+  |     +-- optional X-API-Key and Content-Length middleware
+  |
+  +-- RunManager (one per process)
+  |     +-- parse plan -> PlanValidator
+  |     +-- choose intake: assessment or submitted plan
+  |     +-- RunWorkflow (one instance per run; run state machine)
+  |     +-- ThreadPoolRunScheduler (4 workers) -> background execution
+  |     +-- InMemoryRunCheckpoint, InMemoryRunLog, in-memory outcomes
+  |
+  +-- ExecutePlanUseCase -> RegistryStepRunner -> ModuleRegistry
+  |                                              -> SandboxExecutor
+  |                                              -> allowlisted pandas function
+  |
+  +-- AssessSourceUseCase -> WorkspaceSourceReader
+                           -> ProfileSourceUseCase -> PandasChunkProfiler
+                                                   -> FilesystemProfileWriter
+```
+
+`src/main.py` is the only composition root. It sets:
+
+- workspace = `Path.cwd()`;
+- artifacts root = `<cwd>/artifacts`;
+- registry = `MODULE_SPECS` plus `MODULE_FUNCTIONS`;
+- default sandbox = 60 seconds, 512 MB, no network, workspace-only;
+- four background workers.
+
+## 3. The two supported entry paths
+
+### A. Structured plan
+
+The request must contain `message` or `plan`.
+
+1. The plan is parsed by strict Pydantic (`extra="forbid"`).
+2. `run_id` and `mode` must match when also supplied in the request.
+3. The full validation pipeline runs.
+4. A valid plan that needs no approval becomes `ready` and is scheduled.
+5. A plan with writes or `approval_required: true` becomes `awaiting_approval`.
+6. `POST /runs/{id}/approve` with `approved: true` moves it to `ready` and schedules it.
+7. Before each execution attempt the workflow re-checks registry version, run id, mode, plan
+   hash, and revalidation.
+8. Execution runs source, transformations, then destination through the sandbox.
+
+`approved: false` terminates as `rejected`.
+
+### B. Source-only assessment
+
+The request supplies `source` and no `plan` or `destination`. The API schema still requires
+`message` or `plan`, so a source-only request needs a `message` (for example, "Assess this file").
+
+1. `RunManager` selects `AssessmentPlanIntake` instead of `SubmittedPlanIntake`.
+2. `WorkspaceSourceReader` resolves a workspace-confined file and hashes its bytes.
+3. `AssessSourceUseCase` runs a full scan in chunks inside the sandbox.
+4. `ProfileSourceUseCase` writes per-chunk records, a quality CSV, and an info JSON.
+5. The run becomes `awaiting_clarification` with the assessment attached and
+   `next_action: "confirm"`.
+6. `POST /runs/{id}/confirm` with `{"destination": "..."}` builds a fixed `save_csv` pipeline
+   plan from the draft, rejects a destination that normalizes to the source path, validates the
+   plan, and moves the run to `awaiting_approval`.
+7. Approval executes the plan normally.
+
+Supported source files: `.csv`, `.json`, `.jsonl`, `.ndjson`, `.parquet`, `.pq`.
+
+`mode: "assessment"` is inspection only: it returns the report, reports
+`next_action: "provide_plan"`, and `confirm` returns `409`.
+
+A request with `source` **and** `destination` but no plan is not source-only. It falls through to
+submitted intake and asks for a plan.
+
+Inline source paths inside message text are not detected. `source` must be explicit.
+
+## 4. Actual HTTP API
+
+| Method | Path | Behavior |
+|---|---|---|
+| `POST` | `/runs` | Create a run from a message and/or plan. Returns `201`. |
+| `GET` | `/runs/{run_id}` | Current run state, plan, assessment, result, cleanup, next action. |
+| `POST` | `/runs/{run_id}/confirm` | Supply a destination for an assessment draft. |
+| `POST` | `/runs/{run_id}/approve` | `{"approved": true\|false}`. |
+| `POST` | `/runs/{run_id}/cancel` | Cancel at the next safe boundary. |
+| `GET` | `/runs/{run_id}/logs` | Process-local lifecycle events. |
+| `GET` | `/health` | Service metadata; public even when an API key is configured. |
+
+There is **no resume endpoint**. A clarification run cannot receive new plan input through the
+API; the only API continuation is assessment confirmation. A new request creates a new run.
+
+Errors use `{code, message, retryable, details?}`:
+
+- `PlanValidationError` -> `400`;
+- `RunNotFoundError` -> `404`;
+- conflicts such as invalid state, approval rejected/timeout, cancelled, stale plan -> `409`;
+- request validation -> `422`;
+- registry, sandbox, workflow, and unexpected errors -> `500`.
+
+If `AGENT_ETL_API_KEY` is set, every `/runs` request needs `X-API-Key`; `/health` stays public.
+The request-size check only inspects the `Content-Length` header.
+
+## 5. Module allowlist
+
+Registry version: `1.0.0`. Only these operations can appear in a plan:
+
+| Kind | Module | Notes |
+|---|---|---|
+| Read | `read_csv` | Workspace file, pandas CSV options limited to current signature. |
+| Read | `read_json` | JSON array/document. |
+| Read | `read_jsonl` | JSON Lines. |
+| Read | `read_parquet` | Single Parquet file, requires pyarrow. |
+| Transform | `drop_duplicate_rows` | Not chunkable; subset + keep first/last. |
+| Transform | `drop_empty_rows` | Chunkable; configured subset. |
+| Transform | `trim_whitespace` | Chunkable; leading/trailing/both. |
+| Transform | `standardize_column_names` | Chunkable; lower/upper/preserve, collision-safe. |
+| Transform | `cast_column` | Chunkable; string/integer/float, raise/coerce. |
+| Write | `save_csv` | Writes a CSV file; currently not atomic. |
+
+Startup rejects duplicate module names, a spec with no bound callable, and a bound callable with
+no spec. There are no database modules in the allowlist.
+
+## 6. Validation pipeline
+
+`PlanValidator` runs these checks in order:
+
+1. `SchemaValidator` - plan shape, mode, unique step ids, operation syntax.
+2. `RegistryEntryValidator` - every operation is allowlisted; assessment plans are read-only.
+3. `ArgumentValidator` - argument names, required values, types, constraints.
+4. `PlanPathValidator` - path shape and workspace confinement.
+5. `LimitsValidator` - step count, chunk size, serialized plan size.
+6. `SecurityValidator` - no code/raw SQL, credentials, NaN/infinity, excessive depth/strings.
+7. `ApprovalValidator` - write/destructive plans must set `approval_required: true`;
+   assessment plans may not contain them.
+
+Confirmation validates the generated plan again. Execution validates again before running.
+
+## 7. Run lifecycle
+
+States:
+
+```text
+created -> awaiting_clarification -> ready -> running -> retrying -> succeeded
+         -> awaiting_approval -> ready / rejected / timed_out
+         -> failed / cancelled
+```
+
+Terminal: `succeeded`, `failed`, `rejected`, `cancelled`, `timed_out`.
+
+Approval states: `not_required`, `pending`, `approved`, `rejected`, `timed_out`, `cancelled`.
+
+- `awaiting_approval` requires `pending`.
+- `ready` requires `not_required` or `approved`.
+- `rejected` requires `rejected`.
+- clarification is bounded to 3 attempts.
+- execution allows at most 2 retries after the first attempt, with backoff 0.5, 1.0, capped at
+  5 seconds. Only errors marked retryable are retried.
+- cancellation is checked at approval, step, and retry boundaries. A running step is bounded by
+  the sandbox timeout, not interrupted mid-step.
+- non-success terminal paths apply `AGENT_ETL_CLEANUP_POLICY`. The default `cleanup` removes
+  `artifacts/<run_id>`; `retain` keeps it. Successful runs keep their artifacts.
+
+## 8. Assessment behavior
+
+- Assessment is synchronous during `POST /runs` and the whole operation runs under the sandbox.
+- Full scan, default chunk size 10,000 rows.
+- Profile metrics: column/row/dataset completeness, duplicate rows, uniqueness, numeric
+  mean/median/mode/min/max/non-finite counts, datetime min/max/range, categorical frequencies.
+- Accuracy is `N/A`; consistency and validity are `N/A` until declared rules exist.
+- Finding codes: `SOURCE_EMPTY`, `DUPLICATE_ROWS`, `COLUMN_ALL_NULL`,
+  `COLUMN_MISSING_VALUES`, `NON_FINITE_NUMERIC_VALUES`, `COLUMN_DISTINCT_CAPPED`,
+  `COLUMN_FREQUENCY_TRUNCATED`, `PROFILE_APPROXIMATE`.
+- Draft transformations are deliberately conservative:
+  - duplicates detected -> `drop_duplicate_rows` over all columns, keep first;
+  - any column name not snake_case -> `standardize_column_names` with `case=lower`.
+- No other transformation is proposed. The missing input is `destination`.
+- Assessment responses contain absolute artifact paths produced by the filesystem writer.
+
+## 9. State, artifacts, and logs
+
+- `InMemoryRunCheckpoint` stores immutable run snapshots in a process-local, thread-safe dict.
+  Restart loses all runs.
+- `RunManager` also keeps workflows, outcomes, and a scheduled-id set in memory for the process
+  lifetime; there is no eviction or retention bound.
+- Artifacts:
+
+```text
+artifacts/<run_id>/<source_id>_<source_type>_quality.csv
+artifacts/<run_id>/<source_id>_<source_type>_info.json
+artifacts/<run_id>/<source_id>_<source_type>_profile_chunk_<index>.json
+```
+
+- Profiling artifact writes use a temporary file plus replace. `save_csv` writes directly with
+  `DataFrame.to_csv`, so loader writes are not yet atomic.
+- Logs are lifecycle events only (`run_created`, `run_started`, `run_finished`,
+  approval/confirm/cancel events, scheduling failures). Transform CSV and execution JSONL logs
+  are not implemented.
+- The LangGraph `InMemorySaver` adapter exists but is not used by the application.
+
+## 10. Configuration and defaults
+
+Environment variables read by `Settings.from_env()`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AGENT_ETL_ENVIRONMENT` | `local` | `local`, `test`, or `production`. |
+| `AGENT_ETL_SERVICE_NAME` | `agent-etl-builder` | API title. |
+| `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS` | `300` | Approval wait timeout where the wait is used. |
+| `AGENT_ETL_CLEANUP_POLICY` | `cleanup` | `cleanup` or `retain`. |
+| `AGENT_ETL_MAX_REQUEST_BYTES` | `1_000_000` | Content-Length limit. |
+| `AGENT_ETL_API_KEY` | unset | Optional `X-API-Key` for `/runs`. |
+| `AGENT_ETL_DATABASE_URL` | unset | Optional PostgreSQL DSN. |
+| `AGENT_ETL_DATABASE_SSLMODE` | `prefer` | `prefer` does not verify certificates. |
+| `AGENT_ETL_DATABASE_SSLROOTCERT` | unset | Root certificate path. |
+| `AGENT_ETL_DATABASE_CONNECT_TIMEOUT_SECONDS` | package default | Connection timeout. |
+| `AGENT_ETL_DATABASE_STATEMENT_TIMEOUT_MS` | package default | Statement timeout. |
+| `AGENT_ETL_DATABASE_APPLICATION_NAME` | package default | PostgreSQL application name. |
+
+The workspace and sandbox limits are not environment-configurable in the current composition
+root. The workspace is the process working directory.
+
+Run:
+
+```powershell
+uv run uvicorn --app-dir src main:app --reload
+```
+
+## 11. Verified gaps and limitations
+
+Planning and API:
+
+- No LLM, prompt, model provider, or natural-language plan builder is wired.
+- No LangGraph graph/tool loop; only the unused checkpoint adapter exists.
+- No Python project or code export; optional fixed-template export is deferred (`EXP-1`).
+- Message-only requests return `awaiting_clarification`; there is no resume endpoint.
+- Source-only requests need an explicit `source` plus a `message`; inline paths are not parsed.
+- Profiling is only reachable through assessment; there is no standalone profiling endpoint.
+- Confirmation accepts only a destination. Draft transformations cannot be edited and only
+  `save_csv` is supported.
+- Assessment-only mode cannot be confirmed into a pipeline.
+
+Execution and data:
+
+- Only five transformation modules exist. There is no transformation DSL, filtering, or
+  imputation yet.
+- `save_csv` is the only destination and is not atomic.
+- PostgreSQL read code exists, but no database module is in the registry allowlist. Registry
+  execution also denies network access, so validated plans cannot read PostgreSQL yet (DB-2).
+- Assessment covers workspace files only; no database assessment.
+- Assessment is synchronous and full-scan; no sampling, cache, timeout, or background progress.
+- Source content is not re-checked between assessment and confirmation/execution.
+- An empty source can still be confirmed into a vacuous load.
+
+Operations:
+
+- All run state, outcomes, logs, approval decisions, and scheduling are single-process and
+  in-memory. Multiple workers or a restart lose state and do not coordinate.
+- Approval timeout is only enforced by `RunApprovalCoordinator.wait`, which runs when
+  `RunWorkflow.run()` waits on a pending approval. The API schedules only `ready` runs, so a run
+  left in `awaiting_approval` stays there until approved or cancelled; no API timer expires it.
+  Tracked as `WF-2` in `documents/backlog_v2.txt`.
+- Logs contain lifecycle events only; no transform CSV or execution JSONL.
+- Rate limiting and CORS are not implemented. Authentication is a single optional API key.
+- The request-size check trusts the `Content-Length` header.
+- Execution responses do not include DataFrame rows; they expose `data_available` only.
+- The sandbox is an in-process Python guard, not an OS container. Native extensions, CPU quotas,
+  hard OOM enforcement, and timeouts blocked in native code remain outside it.
+- `pandas` is pinned to `3.0.6`; `pyarrow` is required for Parquet.
+- The runtime used for verification was Python 3.14.5, while `pyproject.toml` targets Python 3.12
+  and type-checking is configured for 3.12.
+
+## 12. Verification baseline
+
+Run from the repository root:
+
+```powershell
+python -m pytest -q
+python -m ruff check src tests
+python -m ruff format --check src tests
+python -m mypy src tests
+uv lock --check
+uv sync --check
+```
+
+Last result on 2026-10-29 at commit `6cdb95e`:
+
+- `pytest`: 515 passed, 3 skipped, 14.19 s, coverage 89.76% (required 80%).
+- `ruff check`: clean.
+- `ruff format --check`: 198 files already formatted.
+- `mypy`: no issues in 197 source files.
+- `uv lock --check` / `uv sync --check`: up to date, no changes.
+- Skips: one PostgreSQL TLS test because the temporary cluster had TLS enabled; two symlink
+  tests because symlinks are unavailable on the Windows runner.
+
+The test suite includes unit, integration, security, architecture, API, sandbox, PostgreSQL,
+profiling, assessment, and transformation coverage. `tests/architecture/test_dependency_rule.py`
+enforces the Dependency Rule and rejects import cycles.
+
+## 13. Source-of-truth map
+
+| Source | What it answers |
+|---|---|
+| `src/` and `tests/` | What the system actually does. Authoritative. |
+| `documents/research.txt` | Concise verified ground truth. Must match code. |
+| `src/COMPONENTS.md` | Detailed component map and call sequences. |
+| `README.md` | Setup, usage, API examples, feature descriptions. |
+| `documents/architecture.txt` | Intended layering and runtime boundaries. |
+| `documents/security.txt` | Security controls and threat assumptions. |
+| `documents/backlog.txt` | v1 scope and delivery status. |
+| `documents/backlog_v2.txt` | Deferred work and known edge cases. |
+| `documents/requirements_agent.txt` | Product requirements and acceptance intent. |
+
+## 14. Maintenance procedure
+
+Update this file when any of these changes:
+
+- a route, request/response field, status code, or next action;
+- a run state, transition, approval rule, retry, or cleanup behavior;
+- a registry module, source format, loader, or transformation;
+- validation checks, limits, security rules, or path policy;
+- composition-root wiring, workspace/artifact location, sandbox limits, or settings;
+- persistence, logging, scheduling, or concurrency behavior;
+- implemented/deferred status of a backlog item;
+- dependencies, supported Python version, or verification baseline.
+
+Checklist:
+
+1. Inspect the changed code and its tests; do not rely on planning docs.
+2. Run the verification commands and record the new baseline.
+3. Update the affected sections and the "Last verified" block.
+4. Move newly discovered complex edge cases to `documents/backlog_v2.txt`.
+5. Never describe a planned feature as working.

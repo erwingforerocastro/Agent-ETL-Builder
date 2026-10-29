@@ -12,6 +12,7 @@ documents/*
 !documents/backlog.txt
 !documents/backlog_v2.txt
 !documents/architecture.txt
+!documents/research.txt
 !documents/workflow.txt
 
 # Tool caches

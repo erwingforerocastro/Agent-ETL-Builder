@@ -1,6 +1,6 @@
 # Agent ETL Builder - Backlog (v2 candidates)
 
-Version: 2.1-draft
+Version: 2.2-draft
 Status: Deferred work; not part of v1 acceptance
 Last updated: 2026-10-29
 
@@ -30,6 +30,7 @@ them.
 | ST-2 | P1 | Persistent checkpoints and crash resume | v1 uses process-local memory only. | ST-1 |
 | DB-2 | P1 | Configured-connection sandbox policy | PostgreSQL reads exist but cannot be selected by validated plans because registry execution denies network access. | DB-1, EXE-1 |
 | API-2 | P2 | Retention, rate limiting, stronger auth | v1 exposes optional API-key protection and process-local logs. | API-1 |
+| WF-2 | P1 | Approval timeout for API-pending runs | The API schedules only `ready` runs; a run left in `awaiting_approval` has no timer that expires it. The configured timeout is enforced only when `RunWorkflow.run()` waits on the decision. | WF-1, API-1 |
 | EXP-1 | P2 | Python export | Fixed-template export is an artifact only and is not on the v1 execution path. | PLN-1, TST-1 |
 | ADP-1 | P2 | Future database adapters | v1 is PostgreSQL-only; MySQL, Oracle, and MongoDB remain future adapters. | LOD-1 |
 | OBS-1 | P2 | Dashboards and alerts | Metrics and traces are deployment concerns after MON-1. | MON-1 |
@@ -69,6 +70,7 @@ These were intentionally moved out of the v1 profiler:
 ## Deferred operational edge cases
 
 - Persistent checkpoints, active-run recovery, and crash resume.
+- Approval timeout scheduling for runs that remain pending in the API.
 - RunManager retention and eviction for long-running deployments.
 - PostgreSQL connection pooling, exhausted pools, and read-only role grants.
 - Configured database connections inside the registry sandbox.
