@@ -244,3 +244,30 @@ async def test_explicit_assessment_mode_does_not_offer_confirmation(tmp_path: Pa
         json={"destination": "output.csv"},
     )
     assert rejected.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_assessment_mode_ignores_a_destination(tmp_path: Path) -> None:
+    (tmp_path / "input.csv").write_text("id\n1\n", encoding="utf-8")
+    app, _ = _build_app(tmp_path)
+
+    created = await _request(
+        app,
+        "POST",
+        "/runs",
+        json={
+            "message": "Assess only",
+            "run_id": "run-asm-4",
+            "mode": "assessment",
+            "source": "input.csv",
+            "destination": "output.csv",
+        },
+    )
+
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["status"] == "awaiting_clarification"
+    assert payload["next_action"] == "provide_plan"
+    assert payload["assessment_id"] == "asm_run-asm-4"
+    assert any("destination was ignored" in question for question in payload["questions"])
+    assert not (tmp_path / "output.csv").exists()

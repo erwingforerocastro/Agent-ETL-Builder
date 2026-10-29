@@ -147,6 +147,7 @@ app = create_app(
     run_manager=run_manager,
     max_request_bytes=settings.max_request_bytes,
     api_key=settings.api_key,
+    plan_generation="ollama" if ollama_synthesizer is not None else "disabled",
     shutdown_callbacks=tuple(shutdown_callbacks),
 )
 app.state.module_registry = module_registry

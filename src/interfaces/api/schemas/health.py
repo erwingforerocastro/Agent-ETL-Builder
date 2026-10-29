@@ -11,3 +11,4 @@ class HealthResponse(BaseModel):
     status: Literal["ok"]
     service: str
     version: str
+    plan_generation: Literal["ollama", "disabled"] = "disabled"

@@ -46,10 +46,11 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - Source assessor: `AssessSourceUseCase` resolves a workspace file through a reader port,
   profiles the full source through `ProfileSourceUseCase`, and derives issues, assumptions,
   selected metrics, missing inputs, and a conservative draft plan. It runs under the sandbox
-  runner. `AssessmentPlanIntake` runs it for source-only requests; confirmation builds a
-  validated `save_csv` pipeline plan and rejects a destination that would overwrite the source.
-  Bounded sampling, inline intent detection, caching, draft editing, and database-backed
-  assessment are deferred to v2.
+  runner. `AssessmentPlanIntake` runs it for source-only requests and for any
+  `mode: "assessment"` request; assessment mode is read-only and ignores a supplied destination.
+  Confirmation builds a validated `save_csv` pipeline plan and rejects a destination that would
+  overwrite the source. Bounded sampling, inline intent detection, caching, draft editing, and
+  database-backed assessment are deferred to v2.
 - Interpreter: an application use case validates the plan, then orchestrates steps through
   a step-runner port; pandas and sandbox mechanics live in infrastructure.
 - Sandbox: one serialized in-process execution guard. It confines file content access to
@@ -196,4 +197,4 @@ source-change revalidation, and database-backed assessment are v2 candidates.
 - The registry, plan, transform log, and execution log are the boundaries between modules.
 - The source-only branch uses `AssessSourceUseCase` through `AssessmentPlanIntake`; it writes
   only assessment artifacts, cannot write to the destination, and builds the executable plan
-  only after `POST /runs/{run_id}/confirm`.
+  only after `POST /runs/{run_id}/confirm`. `mode: "assessment"` always takes this branch.

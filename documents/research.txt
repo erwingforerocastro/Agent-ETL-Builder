@@ -1,9 +1,10 @@
 # Agent ETL Builder - Research / Ground Truth
 
-Version: 2.0
+Version: 2.1
 Last verified: 2026-10-29
-Verified code commit: `a6ada42` (beta `0.2.0b1`; local `main`)
-Verified baseline: 778 passed, 5 skipped, 90.22% coverage; ruff, format, mypy, lock, and sync clean.
+Verified code commit: `0d07699` (beta `0.2.0b1`; local `main`, release tag pending)
+Verified baseline: 782 passed, 5 skipped, 90.24% coverage; ruff, format, mypy, lock, sync, and
+`uv build` clean.
 Optional live Ollama evaluation: 2 passed with `AGENT_ETL_TEST_OLLAMA=1`.
 
 Purpose: explain how the project actually works today, not how it is planned to work.
@@ -124,7 +125,9 @@ The request supplies `source` and no `plan` or `destination`. The API schema sti
 Supported source files: `.csv`, `.json`, `.jsonl`, `.ndjson`, `.parquet`, `.pq`.
 
 `mode: "assessment"` is inspection only: it returns the report, reports
-`next_action: "provide_plan"`, and `confirm` returns `409`.
+`next_action: "provide_plan"`, and `confirm` returns `409`. Assessment mode always selects the
+assessment intake, even if a destination is supplied or the source is missing. A destination is
+ignored and called out in the questions; a missing source becomes a clarification question.
 
 ### C. Natural-language pipeline
 
@@ -163,7 +166,9 @@ code such as `PLAN_SYNTHESIS_UNAVAILABLE`, `PLAN_SYNTHESIS_TIMEOUT`, or
 
 A request with `source` and `destination` but no plan is handled by the natural-language intake.
 A path mentioned only inside message text is not detected; `source` and `destination` must be
-explicit.
+explicit. When natural-language planning is disabled (`AGENT_ETL_OLLAMA_MODEL` unset), a
+plan-less request falls back to the submitted-plan intake, which explains how to enable the
+agent in its clarification message.
 
 ## 4. Actual HTTP API
 
@@ -176,7 +181,7 @@ explicit.
 | `POST` | `/runs/{run_id}/approve` | `{"approved": true\|false}`. |
 | `POST` | `/runs/{run_id}/cancel` | Cancel at the next safe boundary. |
 | `GET` | `/runs/{run_id}/logs` | Redacted in-memory lifecycle and step events. |
-| `GET` | `/health` | Service metadata; public even when an API key is configured. |
+| `GET` | `/health` | Service metadata and `plan_generation` (`ollama` or `disabled`); public even when an API key is configured. |
 
 `next_action` is one of `provide_plan`, `clarify`, `confirm`, `approve`, `wait`, or `none`.
 `clarify` means the client should send `POST /runs/{id}/messages`; assessment pipeline runs use
@@ -190,7 +195,7 @@ Errors use `{code, message, retryable, details?}`:
 - `PlanValidationError` -> `400`;
 - `RunNotFoundError` -> `404`;
 - conflicts such as invalid state, approval rejected/timeout, cancelled, stale plan -> `409`;
-- request validation -> `422`;
+- request validation, including an empty `plan: {}` -> `422`;
 - registry, sandbox, workflow, and unexpected errors -> `500`;
 - a `PlanSynthesisError` raised outside intake -> `503`. A synthesis failure during intake
   terminates the run with the same error code and a `201` run response whose `status` is
@@ -298,6 +303,9 @@ Approval states: `not_required`, `pending`, `approved`, `rejected`, `timed_out`,
   - any column name not snake_case -> `standardize_column_names` with `case=lower`.
 - No other transformation is proposed. The missing input is `destination`.
 - Assessment responses contain absolute artifact paths produced by the filesystem writer.
+- `mode: "assessment"` always selects the assessment intake. It is read-only: a supplied
+  destination is ignored and the questions say so, and a missing source becomes a clarification
+  question. `mode: "assessment"` cannot be confirmed into a pipeline.
 
 The natural-language source schema probe is separate from assessment: it resolves the source,
 computes the normal content hash, and reads only a bounded first chunk for column names/dtypes.
@@ -475,15 +483,17 @@ python -m ruff format --check src tests
 python -m mypy src tests
 uv lock --check
 uv sync --check
+uv build
 ```
 
 Last result on 2026-10-29 for beta `0.2.0b1`:
 
-- `pytest`: 778 passed, 5 skipped, 19.03 s, coverage 90.22% (required 80%).
+- `pytest`: 782 passed, 5 skipped, 19.91 s, coverage 90.24% (required 80%).
 - `ruff check`: clean.
 - `ruff format --check`: 260 files already formatted.
 - `mypy`: no issues in 259 source files.
 - `uv lock --check` / `uv sync --check`: up to date, no changes.
+- `uv build`: sdist and wheel built; the wheel includes `LICENSE`.
 - Skips: the two live Ollama tests unless `AGENT_ETL_TEST_OLLAMA=1`; one PostgreSQL TLS test
   because the temporary cluster had TLS enabled; two symlink tests because symlinks are
   unavailable on the Windows runner.
@@ -491,6 +501,7 @@ Last result on 2026-10-29 for beta `0.2.0b1`:
   `llama3.1:8b`.
 - Manual beta smoke: `scripts/beta_smoke.py` passed the natural-language, clarification, and
   structured-plan flows against a local server.
+- `uv build` on OneDrive needed `UV_LINK_MODE=copy`; otherwise the hardlink cache failed.
 
 The test suite includes unit, integration, security, architecture, API, sandbox, PostgreSQL,
 profiling, assessment, transformation, natural-language planning, monitoring, golden-plan, and
@@ -505,6 +516,8 @@ Dependency Rule and rejects import cycles.
 | `documents/research.txt` | Concise verified ground truth. Must match code. |
 | `src/COMPONENTS.md` | Detailed component map and call sequences. |
 | `README.md` | Setup, usage, API examples, feature descriptions. |
+| `CHANGELOG.md` | Release notes. |
+| `LICENSE` | MIT license terms. |
 | `documents/architecture.txt` | Intended layering and runtime boundaries. |
 | `documents/security.txt` | Security controls and threat assumptions. |
 | `documents/backlog.txt` | Delivery scope and status. |

@@ -13,15 +13,16 @@ from fastapi import FastAPI
 
 from application.planning.intake import NaturalLanguagePlanIntakeFactory
 from application.planning.models import SourceSchema
+from application.ports.plan_intake import PlanIntakeFactoryPort, PlanIntakePort
 from application.ports.plan_synthesizer import ConversationTurn
 from application.registry.specs import MODULE_SPECS
 from application.use_cases.execute_plan import ExecutePlanUseCase
 from application.use_cases.run_manager import RunManager
 from application.use_cases.run_workflow_factory import RunWorkflowFactory
 from application.validation.plan_validator import PlanValidator
-from domain.entities.plan import PlanTransformation
+from domain.entities.plan import ExecutionPlan, PlanTransformation
 from domain.entities.plan_draft import PlanDraft
-from domain.entities.run import PlanRequest, WorkflowLimits
+from domain.entities.run import PlanIntakeResult, PlanRequest, WorkflowLimits
 from domain.errors import PlanSynthesisError, PlanValidationError
 from infrastructure.approval.in_memory import InMemoryApprovalGateway
 from infrastructure.cancellation import EventCancellationToken
@@ -86,6 +87,31 @@ class _FakeSynthesizer:
         return self._drafts.pop(0)
 
 
+class _StubAssessmentFactory(PlanIntakeFactoryPort):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def create(self, plan: ExecutionPlan | None) -> PlanIntakePort:
+        del plan
+        self.calls += 1
+        return _StubAssessmentIntake()
+
+
+class _StubAssessmentIntake(PlanIntakePort):
+    def request(
+        self,
+        request: PlanRequest,
+        *,
+        attempt: int,
+        previous_error: PlanValidationError | None = None,
+    ) -> PlanIntakeResult:
+        del request, attempt, previous_error
+        return PlanIntakeResult(
+            questions=("Assessment intake selected",),
+            missing_inputs=("source",),
+        )
+
+
 def _draft() -> PlanDraft:
     return PlanDraft(
         name="clean_names",
@@ -108,6 +134,8 @@ def _draft() -> PlanDraft:
 def _build_app(
     workspace: Path,
     synthesizer: _FakeSynthesizer,
+    *,
+    assessment_intake_factory: PlanIntakeFactoryPort | None = None,
 ) -> tuple[FastAPI, _RecordingScheduler]:
     registry = build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
     validator = PlanValidator(
@@ -145,6 +173,7 @@ def _build_app(
         scheduler=scheduler,
         clock=clock,
         cancellation_factory=EventCancellationToken,
+        assessment_intake_factory=assessment_intake_factory,
         nl_intake_factory=NaturalLanguagePlanIntakeFactory(
             synthesizer=synthesizer,
             parser=parser,
@@ -353,6 +382,37 @@ async def test_blank_follow_up_message_is_rejected(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_assessment_mode_routes_to_assessment_intake(tmp_path: Path) -> None:
+    synthesizer = _FakeSynthesizer([_draft()])
+    assessment_factory = _StubAssessmentFactory()
+    app, _ = _build_app(
+        tmp_path,
+        synthesizer,
+        assessment_intake_factory=assessment_factory,
+    )
+
+    created = await _request(
+        app,
+        "POST",
+        "/runs",
+        json={
+            "run_id": "run-nl-assessment",
+            "message": "Assess this source",
+            "mode": "assessment",
+            "source": "input.csv",
+            "destination": "output.json",
+        },
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["status"] == "awaiting_clarification"
+    assert body["questions"] == ["Assessment intake selected"]
+    assert assessment_factory.calls == 1
+    assert synthesizer.calls == []
 
 
 @pytest.mark.anyio

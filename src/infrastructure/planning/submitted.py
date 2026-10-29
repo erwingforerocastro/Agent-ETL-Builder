@@ -26,8 +26,9 @@ class SubmittedPlanIntake:
             return PlanIntakeResult(plan=self._plan)
         return PlanIntakeResult(
             reason=(
-                "No executable plan was provided. Plan generation is not configured "
-                "in this version; submit a structured plan with the request."
+                "No executable plan was provided. Natural-language plan generation is "
+                "disabled because AGENT_ETL_OLLAMA_MODEL is not set for this process. "
+                "Submit a structured plan, or restart the API with the model configured."
             )
         )
 

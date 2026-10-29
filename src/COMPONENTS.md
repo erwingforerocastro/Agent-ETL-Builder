@@ -91,12 +91,13 @@ Settings.from_env()
 A `RunWorkflow` instance is intentionally **not** shared between runs: it remembers one
 `run_id` and routes one lifecycle. `RunManager` creates a fresh workflow, a fresh
 cancellation token, and a fresh intake adapter for each run, then schedules execution when
-the run becomes `ready`. Source-only requests select `AssessmentPlanIntake`; plan-supplied
-requests use `SubmittedPlanIntake`; a request with no plan uses
-`NaturalLanguagePlanIntake` when Ollama is configured, otherwise it falls back to
-`SubmittedPlanIntake`. `app.state.database` and `app.state.postgres_loader` expose the
-optional database adapters. `app.state.source_schema_probe`, `app.state.transform_log`, and
-`app.state.ollama_synthesizer` expose the new beta adapters for inspection and tests.
+the run becomes `ready`. Assessment mode, and pipeline-mode requests with a source but no
+destination, select `AssessmentPlanIntake`; plan-supplied requests use `SubmittedPlanIntake`;
+a request with no plan uses `NaturalLanguagePlanIntake` when Ollama is configured, otherwise
+it falls back to `SubmittedPlanIntake`. `app.state.database` and `app.state.postgres_loader`
+expose the optional database adapters. `app.state.source_schema_probe`,
+`app.state.transform_log`, and `app.state.ollama_synthesizer` expose the new beta adapters for
+inspection and tests.
 
 ## 3. Domain (`src/domain/`)
 
@@ -675,7 +676,7 @@ ProfileSourceUseCase.execute(chunks, request)
 | Component | Purpose |
 |---|---|
 | `app.py` | Creates the FastAPI app, installs error handlers, request-size/optional API-key middleware, health router, and run router. |
-| `routes/health.py` | Returns service metadata. Health is currently a constant `ok`; dependency probes can be added later. |
+| `routes/health.py` | Returns service metadata plus `plan_generation` (`ollama` or `disabled`). |
 | `routes/runs.py` | `POST /runs`, `GET /runs/{id}`, confirm, messages, approve, cancel, and logs endpoints. |
 | `schemas/runs.py` | Strict request schemas plus run/plan/assessment/result/cleanup/log/error response schemas, including `RunMessageRequest` and structured log errors. |
 | `schemas/health.py` | Strict health response schema. |
@@ -684,13 +685,19 @@ ProfileSourceUseCase.execute(chunks, request)
 API behavior:
 
 - `POST /runs` accepts a message, an explicit `source` for assessment, and/or a JSON plan.
-  Plans are parsed and validated before a run is created. Source-only requests return
-  `awaiting_clarification` with an assessment and `next_action: "confirm"`.
+  Plans are parsed and validated before a run is created. Pipeline requests with a source but
+  no destination return `awaiting_clarification` with an assessment and
+  `next_action: "confirm"`.
+- `mode: "assessment"` always selects the assessment intake. It is read-only, returns
+  `next_action: "provide_plan"`, ignores a supplied destination with a notice, and cannot be
+  confirmed into a pipeline.
+- An empty `plan: {}` is rejected by request validation (`422`) before intake.
 - `POST /runs/{id}/confirm` supplies the missing destination, builds and validates the pipeline
   plan, rejects source overwrite, and moves the run to `awaiting_approval`.
 - Message-only requests use `NaturalLanguagePlanIntake` when Ollama is configured. It asks for
   missing source/destination and can continue through `POST /runs/{id}/messages`. Without a
-  model, the request returns `awaiting_clarification` with the submitted-plan fallback.
+  model, the request returns `awaiting_clarification` with the submitted-plan fallback, which
+  names `AGENT_ETL_OLLAMA_MODEL` as the missing configuration.
 - Ready runs are submitted to `BackgroundSchedulerPort`; approval-gated runs are submitted
   after a successful approval.
 - `RunManager` keeps per-run workflows (which own their cancellation tokens), outcomes,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -24,6 +25,7 @@ def create_app(
     run_manager: RunManager | None = None,
     max_request_bytes: int = 1_000_000,
     api_key: str | None = None,
+    plan_generation: Literal["ollama", "disabled"] = "disabled",
     shutdown_callbacks: Sequence[Callable[[], None]] = (),
 ) -> FastAPI:
     if max_request_bytes <= 0:
@@ -39,7 +41,13 @@ def create_app(
 
     app = FastAPI(title=service_name, version=version, lifespan=lifespan)
     install_exception_handlers(app)
-    app.include_router(create_health_router(service_name=service_name, version=version))
+    app.include_router(
+        create_health_router(
+            service_name=service_name,
+            version=version,
+            plan_generation=plan_generation,
+        )
+    )
     if run_manager is not None:
         app.include_router(create_run_router(run_manager))
         app.state.run_manager = run_manager

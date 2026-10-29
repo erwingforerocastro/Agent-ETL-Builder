@@ -27,6 +27,15 @@ First usable agent beta.
 - `ExecutePlanUseCase` emits source, step, and destination monitoring events.
 - Direct plan-synthesis failures map to `503`; synthesis failures during intake terminate the
   run with the same stable error code.
+- `/health` reports `plan_generation: "ollama"` or `"disabled"`.
+- Without `AGENT_ETL_OLLAMA_MODEL`, the fallback clarification explains how to enable the agent.
+
+### Fixed
+
+- Assessment mode now routes to the read-only assessment intake even when a destination is
+  supplied or the source is missing. A destination is ignored with an explicit notice.
+- An empty `plan: {}` is rejected as a request-validation error (`422`) with an actionable
+  message instead of a full plan-schema dump.
 
 ### Known limitations
 

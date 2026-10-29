@@ -1,582 +1,355 @@
 # Agent ETL Builder
 
-Local-first agent that builds validated ETL pipelines from a structured request or a
-source-only assessment.
+Local-first ETL agent that turns a natural-language request into a **validated, executable
+pipeline** — and never runs generated code.
 
-**Status:** `0.2.0b1` beta. FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1,
-ASM-1, API-1, TRN-0, TRN-1, LOD-1, NL-1, API-2, MON-1, and BETA-1 are complete. Ten
-transformations are registered in the versioned allowlist, structured plans are validated before
-execution, and the bounded run workflow handles intake, clarification, approval, execution,
-retries, cancellation, and cleanup. A local Ollama model can turn a natural-language request
-into a strictly validated plan, with deterministic source/destination binding and bounded
-repair. File destinations are atomic, execution JSONL and transform CSV logs are available, and
-a transactional PostgreSQL table loader adapter exists. Source-only requests still run a
-read-only assessment and confirm into a validated pipeline plan. The sandbox is an in-process
-guard; OS-level isolation remains deferred. `TST-1` remains partially open for the full
-edge-case matrix; the beta has golden plan-shape tests, security/regression coverage, and a live
-Ollama evaluation.
+[![Version](https://img.shields.io/badge/version-0.2.0b1-blue.svg)](CHANGELOG.md)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## Architecture
+> **Beta software.** `0.2.0b1` is the first usable beta. It is suitable for local evaluation,
+> not production. Run state is process-local, the sandbox is an in-process guard, and the API
+> has no authentication hardening beyond an optional API key.
 
-The project follows the Dependency Rule. Source dependencies point inward:
+## What it does
 
-```text
-interfaces -> application -> domain
-infrastructure -> application -> domain
-main (composition root) -> interfaces + infrastructure
+- **Natural language → plan.** A local [Ollama](https://ollama.com/) model drafts the
+  transformation steps; the system binds the source and destination deterministically from
+  explicit file paths.
+- **Validated before execution.** Every plan passes the same schema, registry, argument, path,
+  limit, security, and approval validation used for hand-written plans.
+- **Approval gate.** Writes, destructive transformations, and plans marked
+  `approval_required: true` wait for `POST /runs/{run_id}/approve`.
+- **Assessment first.** A source-only request profiles the file, reports quality findings, and
+  proposes a conservative draft before anything is written.
+- **Monitoring built in.** Every run writes redacted JSONL events and a per-step transform CSV.
+
+Supported files: `.csv`, `.json`, `.jsonl`/`.ndjson`, `.parquet`/`.pq`.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Message + source + destination] --> B[Local Ollama draft]
+    B --> C[Assign step IDs<br/>bind I/O by extension]
+    C --> D{Plan validator}
+    D -- invalid --> B
+    D -- questions --> E[awaiting_clarification]
+    D -- valid --> F[awaiting_approval]
+    F --> G[Execute allowlisted plan]
+    G --> H[JSONL + transform CSV]
 ```
 
-- `domain/`: enterprise rules and entities. No frameworks or infrastructure imports.
-- `application/`: use cases, ports, validation policy, registry policy, and inward-facing DTOs.
-- `infrastructure/`: framework, persistence, serialization, filesystem, sandbox, and logging adapters.
-- `interfaces/`: FastAPI routes and request/response schemas.
-- `main.py`: composition root; the only place that wires concrete adapters.
+Safety invariants:
 
-`tests/architecture/test_dependency_rule.py` enforces the layer direction.
+- The model **never** chooses the source or destination operation, supplies paths, or sees
+  source values. It receives the message, registry metadata, and sampled column names/dtypes.
+- Model output is constrained by a JSON schema derived from the registry, then parsed,
+  bound, and validated. The validator is the final gate.
+- Execution runs only validated plans through the allowlisted interpreter. Generated code is
+  never executed.
+- Invalid drafts are repaired with the validator error, up to the normal clarification budget.
 
-`documents/research.txt` records the verified current behavior, actual API surface, known gaps, and
-the last passing verification baseline. Update it whenever behavior changes.
+## Quickstart
 
-## Requirements
-
-- Python 3.12+
-- `uv` for environment and dependency management
-- `pyarrow` is installed for Parquet support; `psycopg` for PostgreSQL.
-- Optional: a local [Ollama](https://ollama.com/) server and a model for natural-language
-  planning. The beta is validated with `llama3.1:8b`.
-
-## Setup
+### 1. Install
 
 ```powershell
+git clone https://github.com/erwingforerocastro/Agent-ETL-Builder.git
+cd Agent-ETL-Builder
 uv sync
 ```
 
-For the natural-language agent, pull a model and start Ollama:
+On OneDrive or another filesystem that rejects hardlinks, set `$env:UV_LINK_MODE = "copy"`
+before `uv sync`.
+
+### 2. Start Ollama (required for natural language)
 
 ```powershell
 ollama pull llama3.1:8b
 ollama serve
+```
+
+In the terminal that will run the API:
+
+```powershell
 $env:AGENT_ETL_OLLAMA_MODEL = "llama3.1:8b"
 ```
 
-If `uv` fails to build on a OneDrive/network filesystem with a hardlink error, set
-`$env:UV_LINK_MODE = "copy"` before `uv sync`.
+Without this variable the API still runs structured plans and source assessment, but
+natural-language planning is disabled.
 
-## Run
+### 3. Run the API
 
 ```powershell
 uv run uvicorn --app-dir src main:app --reload
 ```
 
-Health check:
+Check it:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-Expected response:
-
 ```json
-{"status":"ok","service":"agent-etl-builder","version":"0.2.0b1"}
+{
+  "status": "ok",
+  "service": "agent-etl-builder",
+  "version": "0.2.0b1",
+  "plan_generation": "ollama"
+}
 ```
 
-OpenAPI docs are available at `http://127.0.0.1:8000/docs`.
+`plan_generation` is `disabled` when `AGENT_ETL_OLLAMA_MODEL` is unset.
 
-## 5-minute beta test
+### 4. Smoke test
 
-With the API running from the repository root and Ollama configured:
+From the repository root, with the server running:
 
 ```powershell
 uv run python scripts/beta_smoke.py
 ```
 
-The script runs three flows: a natural-language request, a clarification followed by a
-follow-up message, and a structured plan. It verifies `beta_output.json` and `beta_output.csv`,
-then prints the run log paths.
+The script exercises three flows: natural language, clarification + follow-up, and a structured
+plan. It verifies `beta_output.json` and `beta_output.csv`, then prints the log paths.
 
-## Quality checks
+## Three ways to use it
 
-```powershell
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src tests
+| Goal | `mode` | `source` | `destination` | `plan` |
+|---|---|---|---|---|
+| Natural-language pipeline | omit or `pipeline` | required | required | omit |
+| Read-only assessment | `assessment` | required | omit | omit |
+| Structured plan | omit | in the plan | in the plan | required |
+
+### Natural-language pipeline
+
+Requires `AGENT_ETL_OLLAMA_MODEL`.
+
+```json
+{
+  "message": "Remove duplicate rows, trim whitespace, and save the result as JSON.",
+  "source": "examples/beta/input.csv",
+  "destination": "output.json"
+}
 ```
 
-Format files with:
+The run returns `awaiting_approval`. Approve it:
 
 ```powershell
-uv run ruff format .
-```
-
-The test command enforces at least 80% coverage for the `src/` source tree.
-
-## Configuration
-
-Settings come from environment variables:
-
-| Variable | Default | Values |
-|---|---|---|
-| `AGENT_ETL_SERVICE_NAME` | `agent-etl-builder` | Non-blank string |
-| `AGENT_ETL_ENVIRONMENT` | `local` | `local`, `test`, `production` |
-| `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS` | `300` | Positive number |
-| `AGENT_ETL_CLEANUP_POLICY` | `cleanup` | `cleanup`, `retain` |
-| `AGENT_ETL_MAX_REQUEST_BYTES` | `1000000` | Positive integer |
-| `AGENT_ETL_DATABASE_URL` | unset | Optional PostgreSQL DSN |
-| `AGENT_ETL_DATABASE_SSLMODE` | `prefer` | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` |
-| `AGENT_ETL_DATABASE_SSLROOTCERT` | unset | Optional CA certificate path for `verify-ca`/`verify-full` |
-| `AGENT_ETL_DATABASE_CONNECT_TIMEOUT_SECONDS` | `10` | Positive integer |
-| `AGENT_ETL_DATABASE_STATEMENT_TIMEOUT_MS` | `30000` | Positive integer |
-| `AGENT_ETL_DATABASE_APPLICATION_NAME` | `agent-etl-builder` | Non-blank string |
-| `AGENT_ETL_API_KEY` | unset | Optional API key for `/runs` |
-| `AGENT_ETL_OLLAMA_MODEL` | unset | Model name; unset disables natural-language planning |
-| `AGENT_ETL_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP endpoint |
-| `AGENT_ETL_OLLAMA_TIMEOUT_SECONDS` | `90` | Plan-generation request timeout |
-
-Copy `.env.example` values into your shell or a local `.env` loader. Never commit `.env`
-files or secrets.
-
-## State persistence
-
-V1 uses the process-local `InMemoryRunCheckpoint` adapter for run state. Each run snapshot is
-saved after every transition, but the snapshot is lost when the process stops.
-
-- A run is bound to one process; multiple workers do not share run state.
-- V1 has no cross-restart resume.
-- Plans, lineage, and run artifacts must be persisted separately from run checkpoints.
-- The LangGraph `InMemorySaver` factory remains available for future graph-based workflows
-  but is not wired into the application composition root.
-- A persistent PostgreSQL checkpointer is deferred to a later version.
-
-## PostgreSQL connectivity
-
-`PostgresDatabase` opens transaction-scoped sessions through `psycopg`. It is wired lazily in
-the composition root when `AGENT_ETL_DATABASE_URL` is set; no connection is opened at startup.
-
-- All values use psycopg parameters; identifiers and SQL text remain the caller's
-  responsibility. Ingestion and loading modules will build and validate those statements.
-- Read-only sessions execute `SET TRANSACTION READ ONLY`; writable sessions commit on success
-  and roll back on any exception.
-- `statement_timeout` is applied per transaction, and connection attempts use the configured
-  connect timeout and application name.
-- TLS is controlled by `AGENT_ETL_DATABASE_SSLMODE`. Use `verify-full` with
-  `AGENT_ETL_DATABASE_SSLROOTCERT` in production; `prefer` is the local-development default.
-- Driver errors are wrapped as `IngestionError` (`DATABASE_READ_FAILED`) or `LoadError`
-  (`DATABASE_WRITE_FAILED`) with a stable code, SQLSTATE, and no DSN, SQL text, or parameter
-  values.
-
-Integration tests start a temporary PostgreSQL cluster and skip when server binaries are not
-available. Set `AGENT_ETL_TEST_PG_BIN` to a PostgreSQL `bin` directory to select a specific
-installation. TLS tests generate a short-lived self-signed certificate with OpenSSL; set
-`AGENT_ETL_TEST_OPENSSL` when OpenSSL is not on `PATH`.
-
-## Ingestion
-
-Read-only readers are registered in the allowlist for plan execution:
-
-| Function | Format | Chunked implementation |
-|---|---|---|
-| `read_csv` | CSV | pandas `chunksize` |
-| `read_json` | JSON array | full document parse, then deterministic chunks |
-| `read_jsonl` | JSON Lines | pandas `lines=True` with `chunksize` |
-| `read_parquet` | Parquet | pyarrow row batches |
-
-`read_*` returns a DataFrame for a plan source step. The streaming variants
-`iter_csv_chunks`, `iter_json_chunks`, `iter_jsonl_chunks`, and `iter_parquet_chunks` accept a
-`chunk_size` and preserve row order. JSON arrays must be parsed before chunking, so use JSONL
-for large line-delimited files.
-
-Stable identifiers and reproducibility metadata live in
-`src/infrastructure/ingestion/identifiers.py` and `src/domain/entities/ingestion.py`:
-
-- `source_id_for(source_type, canonical_uri)` returns `src_<hash>` and strips URI credentials.
-- `canonical_file_uri`, `file_content_hash`, `frame_content_hash`, and `frame_schema_hash`
-  provide stable source, content, and schema hashes.
-- `SourceIdentity` carries `source_id`, `source_type`, content/schema hashes, and row count.
-- `ChunkManifest.from_identity(...)` plus `chunk_specs` describe ordered chunks, partial final
-  chunks, total rows, and merge method.
-- `iter_frame_chunks` yields independent in-memory chunks; `artifact_id` builds sanitized
-  run/source/artifact/chunk names.
-
-PostgreSQL reads use `PostgresSourceReader` with `DatabasePort`. It opens read-only
-transactions, validates and quotes table/column identifiers, and uses server-side cursors for
-`iter_chunks`. `read_source` returns the DataFrame together with its `SourceIdentity`. The
-reader accepts the configured database port; wiring it into source assessment is part of
-ASM-1. Making it a registry plan module requires the sandbox network policy to allow
-configured database connections, which is not implemented yet. Raw SQL, `WHERE` clauses, and
-filter expressions are also not accepted yet.
-
-## Profiling and quality
-
-`ProfileSourceUseCase` consumes ordered full-source chunks, writes one mergeable record per
-chunk, merges the records, and writes:
-
-| Artifact | Path |
-|---|---|
-| Quality metrics | `artifacts/<run_id>/<source_id>_<source_type>_quality.csv` |
-| Schema, statistics, and metadata | `artifacts/<run_id>/<source_id>_<source_type>_info.json` |
-| Per-chunk records | `artifacts/<run_id>/<source_id>_<source_type>_profile_chunk_<index>.json` |
-
-The v1 profile reports:
-
-- column/row/dataset completeness;
-- duplicate rows and column uniqueness;
-- numeric mean, median, multi-valued mode, min/max, and non-finite counts;
-- date min/max/range for datetime-typed columns;
-- categorical frequency tables including null and empty categories;
-- accuracy as `N/A (formula not provided)`;
-- consistency and validity as `N/A` until declared-rule evaluation arrives in v2.
-
-Merging uses additive counts, exact finite values, date boundaries, frequency maps, and row
-fingerprints. It never computes a final average from averages or a median from per-chunk
-medians. Numeric values and maps are currently retained in memory; bounded sampling and
-Parquet spill/external sort are tracked in the v2 backlog.
-
-`ProfileRequest` carries only the run/source identity, chunk metadata, and an optional content
-hash. `ProfileLimits` bounds tracked distinct values, row fingerprints, and frequency output;
-capped results are marked approximate. Chunks must share column order and compatible inferred
-types; incompatible categorical/numeric/date mixes or naive/aware datetime mixes raise
-`PROFILE_SCHEMA_DRIFT`. Per-chunk and final artifacts live in the run folder and follow the
-cleanup policy. The deterministic HTML summary and optional narrative are v2 work.
-
-## Source-only assessment
-
-A request that supplies `source` but no structured plan or destination starts with a read-only
-assessment. `RunManager` selects `AssessmentPlanIntake`, which:
-
-- resolves a workspace-confined CSV, JSON, JSONL, or Parquet file through
-  `WorkspaceSourceReader`;
-- profiles the full source in chunks and writes the normal quality/info/chunk artifacts;
-- derives issues, assumptions, selected quality metrics, and a conservative draft plan;
-- asks for a destination without writing one.
-
-The run stays in `awaiting_clarification` with `next_action: "confirm"` and exposes the
-assessment payload through `GET /runs/{run_id}`. `POST /runs/{run_id}/confirm` with a
-workspace-relative destination builds a `save_csv` pipeline plan from the draft, rejects a
-destination that would overwrite the source, validates the plan, and moves the run to
-`awaiting_approval`. Approval then executes the validated pipeline through the sandbox.
-
-`mode: "assessment"` is inspection-only: it returns the assessment but never offers
-confirmation. Inline source paths in messages, sampling, assessment caching, draft editing,
-database-backed assessment, and stale-source revalidation are tracked in
-`documents/backlog_v2.txt`.
-
-## Natural-language agent
-
-When `AGENT_ETL_OLLAMA_MODEL` is configured, a request with a message and no plan is handled by
-`NaturalLanguagePlanIntake` instead of the submitted-plan fallback:
-
-```powershell
-$body = @{
-  message = "Remove duplicate rows, trim whitespace, and save the result as JSON."
-  source = "input.csv"
-  destination = "output.json"
-} | ConvertTo-Json
-
-$run = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/runs `
-  -ContentType application/json -Body $body
-```
-
-The flow is:
-
-1. Source and destination operations are bound deterministically from the file extension
-   (`.csv`, `.json`, `.jsonl`/`.ndjson`, `.parquet`/`.pq`). The agent never invents a write path.
-2. The first 50 rows are sampled only for column names and dtypes. Source values are not sent to
-   the model.
-3. The model returns a strict transformation draft. The JSON schema is derived from the registry:
-   only the ten transformation modules, exact parameter names, enums, and no extra properties.
-4. The system assigns step IDs, binds the source/destination, and runs the normal plan validator.
-5. Invalid drafts are repaired with the validator error, up to the clarification attempt limit.
-6. The run moves to `awaiting_approval`. Approval executes it through the sandbox.
-
-If the source or destination is missing, the run returns `awaiting_clarification` with questions.
-Continue it with:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/runs/$($run.run_id)/messages" `
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/runs/$($run.run_id)/approve" `
   -ContentType application/json `
-  -Body (@{ message = "Use output.json" } | ConvertTo-Json)
+  -Body (@{ approved = $true } | ConvertTo-Json)
 ```
 
-`message` is required; `source` and `destination` are optional and can supply missing values.
-Inline source-path detection in free text, background generation, schema-aware plan-time
-validation, persistent conversations, and non-Ollama providers are v2 work.
+Inspect `logs/<run_id>.jsonl` and `artifacts/<run_id>/transform_log.csv`.
 
-Plan generation is synchronous and usually takes 15-45 seconds with `llama3.1:8b`. If Ollama is
-unavailable, the run terminates with `PLAN_SYNTHESIS_UNAVAILABLE` or `PLAN_SYNTHESIS_TIMEOUT`.
+### Read-only assessment
 
-## Monitoring
+```json
+{
+  "message": "Assess this file",
+  "mode": "assessment",
+  "source": "examples/beta/input.csv"
+}
+```
 
-Every run writes:
+The response contains the assessment report and `next_action: "provide_plan"`. Assessment mode
+never writes output; a supplied destination is ignored with a notice.
 
-| Output | Path | Purpose |
-|---|---|---|
-| Execution JSONL | `logs/<run_id>.jsonl` | Lifecycle and step events with timestamps, status, durations, errors, and context. |
-| Transform CSV | `artifacts/<run_id>/transform_log.csv` | One row per transformation step: ID, filename, chunk, predecessor, step, date, result, error, warnings. |
+To assess **and then write**, omit `mode` and `destination`:
 
-Monitoring values are redacted for secret-looking keys, DSN credentials, bearer tokens, and
-`password=`-style assignments. If a log file cannot be written, the event falls back to stderr;
-the pipeline result is not changed. Cleanup removes partial artifacts but preserves
-`transform_log.csv` so failed runs remain inspectable. Log rotation, concurrent writers, and
-cross-process locking are deferred.
+```json
+{
+  "message": "Assess and prepare a cleaned copy",
+  "source": "examples/beta/input.csv"
+}
+```
 
-## Implemented transformations
+The run returns `next_action: "confirm"`. Supply a destination with
+`POST /runs/{run_id}/confirm`, then approve the validated plan.
 
-The transformation batches live in `src/infrastructure/transformations/`. Each function
-returns a new DataFrame, validates its columns, preserves the input, and raises
-`TransformationError` with stable metadata.
+### Structured plan
 
-| Function | Behavior |
-|---|---|
-| `drop_duplicate_rows` | Drops duplicates by all or selected columns; keeps first or last. |
-| `drop_empty_rows` | Drops rows whose selected values are all null or blank text. |
-| `trim_whitespace` | Trims leading, trailing, or both whitespace styles in text columns. |
-| `standardize_column_names` | Produces collision-free snake_case names with case policy. |
-| `cast_column` | Casts one column to string, integer, or float with raise/coerce modes. |
-| `filter_rows` | Keeps rows matching one literal predicate; supports comparisons, null checks, and text matching. |
-| `fill_missing_values` | Fills nulls in one column with a constant, mean, median, or mode. |
-| `normalize_dates` | Parses a text or datetime column and formats it with a strftime pattern. |
-| `change_text_case` | Applies lower, upper, or title case to selected or all text columns. |
-| `replace_values` | Replaces exact text matches with another string or with null. |
+Submit a complete plan — not `{}`. See
+[`examples/beta/plan.json`](examples/beta/plan.json) for a working template. Required fields:
+`plan_version`, `mode`, `run_id`, `name`, `description`, `source`, `destination`, `chunking`,
+`on_error`, and `approval_required`.
 
-These modules are registered in registry version `1.0.0`. The allowlist policy lives in
-`src/application/registry/specs.py`, concrete pandas callables are bound in
-`src/infrastructure/registry/bindings.py`, and metadata is exposed through
-`src/application/ports/module_registry.py`.
-
-The transformation step list is the v1 DSL. Validation enforces operation roles, unique step
-IDs, idempotence, and cross-parameter rules before execution. Filtering, coercing date
-normalization, and nulling replacement require approval because they can remove or destroy
-values.
-
-## Loaders
-
-File destinations write to a temporary file in the destination directory, flush it, and replace
-the final path atomically. A failed write leaves the previous file intact and removes the
-temporary file. Writes overwrite by default and require the destination directory to exist.
-
-| Destination | Behavior |
-|---|---|
-| `save_csv` | Atomic UTF-8 CSV, `index=False`. |
-| `save_json` | Atomic JSON array (`orient="records"`), ISO dates. |
-| `save_jsonl` | Atomic JSON Lines, ISO dates. |
-| `save_parquet` | Atomic Parquet via pyarrow, `index=False`. |
-
-`PostgresTableLoader` is available as an adapter with `insert`, `upsert`, and
-`truncate_insert` modes. It validates and quotes schema/table/column identifiers, parameterizes
-values, batches inserts, and rolls back the entire load if any batch fails. The target table
-must already exist. It is not registered as a plan destination until the sandbox can allow a
-configured database connection (`DB-2`).
-
-## Module registry
-
-The registry is a static allowlist; it never imports module paths supplied by a user or
-model. At startup it derives input metadata from each callable signature and validates:
-
-- names, versions, module paths, and duplicate entries;
-- required/default inputs and declared constraints;
-- examples against input names, required values, types, and enums;
-- return annotations and declared dependencies;
-- exact registry/module versions at lookup time.
-
-Any drift raises `RegistryError` and prevents the application from starting.
-
-## Plan validation
-
-Structured plans use a strict Pydantic schema (`extra="forbid"`) in
-`src/infrastructure/validation/plan_schema.py`. The schema is an ingress adapter: it
-translates JSON into domain entities, while the policy checks live in
-`src/application/validation/`. `PlanValidator` then checks, in order:
-
-1. schema, mode, and step identifiers;
-2. registry allowlist and assessment read-only rules;
-3. operation roles: sources read, transformations consume the pipeline DataFrame, and
-   destinations write;
-4. required, optional, unknown, and pipeline-managed arguments, including types and enums;
-5. transformation contract: idempotence and cross-parameter rules for filtering,
-   imputation, and date normalization;
-6. workspace-confined paths (traversal, absolute paths, symlinks, Windows reserved names,
-   control characters, and overlong paths);
-7. step count, chunk size, and serialized plan size;
-8. unsafe code, raw SQL, and embedded credentials;
-9. approval for writes, DDL, destructive transformations, and secret-bearing operations.
-
-Plan validation cannot inspect the source schema: column existence, dtype compatibility, and
-all-null behavior are checked by the transformation modules during execution.
-
-`src/application/validation/plan_validator.py` validates domain plans and has no Pydantic
-or filesystem dependency. `src/infrastructure/validation/plan_validator.py` is the
-JSON-facing facade: it accepts either an `ExecutionPlan` or a JSON-compatible payload,
-parses the payload, and delegates inward. Filesystem path inspection is isolated behind
-`WorkspaceProbePort` and implemented by `FilesystemWorkspaceProbe`.
-
-Every failure raises `PlanValidationError` with a stable code and sanitized context.
-Validation checks are independent `PlanValidationCheck` implementations assembled by
-`build_default_checks`; callers can inject a custom pipeline with
-`PlanValidator(..., checks=(...))`.
-
-## Sandbox execution
-
-`ExecutePlanUseCase` validates the plan before calling any step. `SandboxExecutor` then
-runs each allowlisted callable under a serialized guard:
-
-- file reads and writes are confined to the workspace; read-only runtime paths needed by
-  Python and pandas are allowed;
-- network connections and name resolution are denied by default;
-- wall-clock time is bounded, and the traced Python memory peak is checked;
-- the workspace is the execution working directory and the previous directory is restored.
-
-The guard is an in-process Python control, not an OS-level container. It does not isolate
-native extensions, CPU quotas, or code that bypasses the patched Python APIs; those remain
-deployment-level hardening items.
-
-## Run workflow
-
-`RunWorkflow` is a plain application state machine; persistence and external effects are
-injected ports. One instance handles one run and checkpoints every transition.
-
-- Plan intake goes through `PlanIntakePort`. The manager selects assessment intake for
-  source-only requests, natural-language intake when Ollama is configured, and submitted-plan
-  intake otherwise. A deterministic adapter is available for tests and local development.
-- Validation and clarification are bounded to 3 attempts. A follow-up message resumes the same
-  intake and keeps its bounded conversation history.
-- Approval is derived from registry policy, not trusted from the plan's own flag alone.
-  The default timeout is 300 seconds.
-- Execution retries at most twice with bounded exponential backoff; only retryable errors
-  are retried.
-- Cancellation is checked at approval, step, and retry boundaries.
-- Non-success terminal paths run cleanup according to `AGENT_ETL_CLEANUP_POLICY`
-  (`cleanup` or `retain`).
-
-Run state, API results, conversations, and in-memory log entries are process-local. The JSONL and
-transform CSV files survive a restart, but runs cannot be resumed. Configuration:
-
-```text
-AGENT_ETL_APPROVAL_TIMEOUT_SECONDS=300
-AGENT_ETL_CLEANUP_POLICY=cleanup
-AGENT_ETL_MAX_REQUEST_BYTES=1000000
-# AGENT_ETL_API_KEY=replace-me
-# AGENT_ETL_OLLAMA_MODEL=llama3.1:8b
-# AGENT_ETL_OLLAMA_BASE_URL=http://127.0.0.1:11434
-# AGENT_ETL_OLLAMA_TIMEOUT_SECONDS=90
+```json
+{
+  "message": "Run the structured plan",
+  "plan": { "...": "see examples/beta/plan.json" }
+}
 ```
 
 ## HTTP API
 
-The API is created in `src/main.py` and exposes the run contract:
-
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/runs` | Create a run from a message, source-only request, and/or structured plan. Returns `201` with run state. |
-| `GET` | `/runs/{run_id}` | Current status, plan, assessment, draft plan, questions, result, cleanup, and next action. |
+| `POST` | `/runs` | Create a run from a message, source-only request, and/or structured plan. Returns `201`. |
+| `GET` | `/runs/{run_id}` | Status, plan, assessment, questions, result, cleanup, and next action. |
 | `POST` | `/runs/{run_id}/confirm` | Confirm an assessment and supply `{"destination": "output.csv"}`. |
 | `POST` | `/runs/{run_id}/messages` | Continue a clarification run with `{"message": "..."}` and optional `source`/`destination`. |
-| `POST` | `/runs/{run_id}/approve` | Approve or reject: `{"approved": true\|false}`. |
+| `POST` | `/runs/{run_id}/approve` | `{"approved": true}` or `{"approved": false}`. |
 | `POST` | `/runs/{run_id}/cancel` | Request cancellation at the next safe boundary. |
-| `GET` | `/runs/{run_id}/logs` | Structured lifecycle and step events for the run. |
-| `GET` | `/health` | Liveness and service metadata. |
+| `GET` | `/runs/{run_id}/logs` | Redacted in-memory lifecycle and step events. |
+| `GET` | `/health` | Service metadata and plan-generation capability. |
 
-Example (natural-language run, then approval):
+`next_action` is one of `provide_plan`, `clarify`, `confirm`, `approve`, `wait`, or `none`.
+
+Errors use `{code, message, retryable, details?}`:
+
+| Status | Meaning |
+|---|---|
+| `400` | Plan failed schema, registry, argument, path, limit, security, or approval validation. |
+| `404` | Unknown run. |
+| `409` | State conflict (already approved, rejected, terminal, or not awaiting clarification). |
+| `422` | Request body validation failed, including an empty `plan` object. |
+| `503` | Direct plan-synthesis failure outside intake. |
+
+Interactive docs: <http://127.0.0.1:8000/docs>.
+
+## Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AGENT_ETL_SERVICE_NAME` | `agent-etl-builder` | API title. |
+| `AGENT_ETL_ENVIRONMENT` | `local` | `local`, `test`, or `production`. |
+| `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS` | `300` | Approval wait timeout where the wait is used. |
+| `AGENT_ETL_CLEANUP_POLICY` | `cleanup` | `cleanup` removes partial artifacts; `retain` keeps them. |
+| `AGENT_ETL_MAX_REQUEST_BYTES` | `1000000` | `Content-Length` limit. |
+| `AGENT_ETL_API_KEY` | unset | Require `X-API-Key` on `/runs`. `/health` stays public. |
+| `AGENT_ETL_OLLAMA_MODEL` | unset | Model name; unset disables natural-language planning. |
+| `AGENT_ETL_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP endpoint; must not contain credentials. |
+| `AGENT_ETL_OLLAMA_TIMEOUT_SECONDS` | `90` | Plan-generation request timeout. |
+| `AGENT_ETL_DATABASE_URL` | unset | Optional PostgreSQL DSN. |
+| `AGENT_ETL_DATABASE_SSLMODE` | `prefer` | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. |
+| `AGENT_ETL_DATABASE_SSLROOTCERT` | unset | CA certificate for `verify-ca`/`verify-full`. |
+| `AGENT_ETL_DATABASE_CONNECT_TIMEOUT_SECONDS` | `10` | Connection timeout. |
+| `AGENT_ETL_DATABASE_STATEMENT_TIMEOUT_MS` | `30000` | Statement timeout. |
+| `AGENT_ETL_DATABASE_APPLICATION_NAME` | `agent-etl-builder` | PostgreSQL application name. |
+
+Copy `.env.example` into your shell. Never commit `.env` files or secrets.
+
+## Monitoring
+
+| Output | Path | Contents |
+|---|---|---|
+| Execution JSONL | `logs/<run_id>.jsonl` | Lifecycle and step events with timestamps, status, durations, errors, and context. |
+| Transform CSV | `artifacts/<run_id>/transform_log.csv` | One row per transformation step: ID, filename, chunk, predecessor, step, date, result, error, warnings. |
+
+Both apply secret/credential redaction. If a file cannot be written, the event falls back to
+stderr and the run continues. Cleanup preserves `transform_log.csv` so failed runs remain
+inspectable.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `400 PLAN_INVALID_SCHEMA` for `"plan": {}` | An empty object was supplied as a plan. | Omit `plan` for natural-language or assessment requests; use a complete plan for structured runs. The API now rejects `{}` with `422` and a clear message. |
+| `No executable plan was provided ... AGENT_ETL_OLLAMA_MODEL is not set` | The server process has no model configured. | Restart the API with `$env:AGENT_ETL_OLLAMA_MODEL = "llama3.1:8b"` in the same terminal. |
+| `Assessment mode is read-only; the destination was ignored` | `mode: "assessment"` with a destination. | Remove `destination` for inspection only, or omit `mode` to assess and then confirm a destination. |
+| `409 RUN_INVALID_STATE` on `/messages` | The run is not awaiting clarification. | Send follow-ups only while `next_action` is `clarify`. |
+| `404 RUN_NOT_FOUND` after a restart | Run state is in memory only. | Create a new run. JSONL/CSV files remain on disk. |
+| `PLAN_SYNTHESIS_TIMEOUT` | The model took longer than the request timeout. | Raise `AGENT_ETL_OLLAMA_TIMEOUT_SECONDS`, use a smaller model, or retry. |
+| `PLAN_SYNTHESIS_UNAVAILABLE` | Ollama is not reachable. | Start `ollama serve` and confirm `AGENT_ETL_OLLAMA_BASE_URL`. |
+
+For a message-only request, the agent asks for source and destination. Continue it with:
 
 ```powershell
-$body = @{
-  message = "Remove duplicate rows, trim whitespace, and save the result as JSON."
-  source = "input.csv"
-  destination = "output.json"
-} | ConvertTo-Json
-
-$run = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/runs `
-  -ContentType application/json -Body $body
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/runs/$($run.run_id)/approve" `
-  -ContentType application/json -Body (@{ approved = $true } | ConvertTo-Json)
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/runs/$($run.run_id)/messages" `
+  -ContentType application/json `
+  -Body (@{
+    message = "Use examples/beta/input.csv and output.json"
+    source = "examples/beta/input.csv"
+    destination = "output.json"
+  } | ConvertTo-Json)
 ```
 
-Example (source-only assessment, then confirmation):
+## Known limitations
+
+- **Process-local state.** Runs, outcomes, conversations, approvals, and in-memory logs are lost
+  on restart. There is no cross-restart resume or multi-worker coordination.
+- **Local Ollama only.** No OpenAI or remote provider, tool-calling loop, or model fallback.
+- **Synchronous planning.** Natural-language generation blocks `POST /runs` for roughly 15–45
+  seconds with `llama3.1:8b`; there is no background or generating state.
+- **Bounded schema context.** The prompt samples the first 50 rows for column names/dtypes.
+  Column existence and dtype compatibility are checked during execution, not plan validation.
+- **Explicit paths only.** `source` and `destination` must be request fields; inline path
+  detection in free text is not implemented.
+- **No web UI.** The interface is FastAPI/OpenAPI plus the smoke script.
+- **No plan-time schema validation.** A valid plan can still reference a missing column and fail
+  during execution.
+- **In-process sandbox.** It blocks network access, confines paths, and bounds time/memory, but
+  it is not an OS container. CPU quotas, hard OOM enforcement, and native-code timeouts remain
+  hardening items.
+- **PostgreSQL is adapter-only.** A transactional table loader exists, but no database module
+  is in the registry allowlist because registry execution denies network access.
+- **No log rotation or cross-process locking.** The beta assumes one writer per run.
+- **Approval timeout is not enforced for API-pending runs.** A run left in `awaiting_approval`
+  stays there until approved or cancelled.
+- **`TST-1` remains partial.** Coverage is strong but not the full edge-case matrix.
+
+Deferred work is tracked in [`documents/backlog_v2.txt`](documents/backlog_v2.txt).
+
+## Architecture
+
+The Dependency Rule is enforced by `tests/architecture/test_dependency_rule.py`:
+
+```text
+interfaces ----> application ----> domain
+infrastructure -> application ----> domain
+main (composition root) -> interfaces + infrastructure
+```
+
+| Layer | Responsibility |
+|---|---|
+| `domain/` | Plans, runs, registry entries, assessments, approvals, errors. No frameworks. |
+| `application/` | Use cases, ports, validation policy, registry policy, planning policy. |
+| `infrastructure/` | PostgreSQL, filesystem, Ollama, sandbox, logging, profiling adapters. |
+| `interfaces/` | FastAPI routes and request/response schemas. |
+| `src/main.py` | The only composition root. |
+
+See [`src/COMPONENTS.md`](src/COMPONENTS.md) for the detailed component map and call sequences,
+and [`documents/architecture.txt`](documents/architecture.txt) for boundaries and runtime
+decisions.
+
+## Development
 
 ```powershell
-$body = @{
-  message = "Assess input.csv"
-  run_id = "1729850000000-a1b2c3d4"
-  source = "input.csv"
-} | ConvertTo-Json
-
-$run = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/runs `
-  -ContentType application/json -Body $body
-$run.assessment.draft_plan
-
-$confirm = @{ destination = "output.csv" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/runs/$($run.run_id)/confirm" `
-  -ContentType application/json -Body $confirm
+uv sync
+python -m pytest -q
+python -m ruff check src tests
+python -m ruff format --check src tests
+python -m mypy src tests
+uv lock --check
+uv sync --check
 ```
 
-A structured `plan` can still be submitted directly with `POST /runs`; it is schema-parsed,
-validated, and executed the same way.
+The test command enforces at least 80% coverage for `src/`. Format with:
 
-Behavior notes:
+```powershell
+python -m ruff format src tests
+```
 
-- Runs that are ready execute on a background thread pool; API requests never wait for
-  execution. Approval-gated runs execute after `POST /runs/{run_id}/approve`.
-- Supplying `source` without a plan or destination runs a synchronous, read-only assessment and
-  returns `awaiting_clarification` with `next_action: "confirm"`. Confirm before approval; the
-  source is never written to.
-- Message-only requests are handled by the natural-language agent when Ollama is configured.
-  Without a model, they return `awaiting_clarification`; submit `source` for assessment or a
-  structured `plan` to execute. Inline source paths in free text are not detected.
-- Plans are schema-parsed, validated, and only then used to create a run. Invalid plans return
-  `400`; unknown runs return `404`; state conflicts return `409`. Pipeline plans containing
-  writes or destructive steps must set `approval_required: true`; the workflow still derives
-  the final approval requirement from registry policy.
-- Errors use `{code, message, retryable, details?}` and never expose internal stack traces.
-- Request bodies are limited by `AGENT_ETL_MAX_REQUEST_BYTES`. If `AGENT_ETL_API_KEY` is set,
-  `/runs` requires `X-API-Key`; `/health` remains public.
-- Results expose status, output count, data availability, and sanitized step errors; raw
-  DataFrames are not serialized into API responses. Assessments include findings, selected
-  metrics, draft-plan rationale, artifact paths, and missing inputs.
-- `GET /runs/{run_id}/logs` returns redacted in-memory lifecycle and step events. The on-disk
-  JSONL and transform CSV logs survive a restart; in-memory run state does not. Rate limiting
-  remains a deployment-level control for production exposure.
+Optional live Ollama evaluation:
 
-## Security baseline
-
-- Generated code is never executed. The interpreter runs only validated plans through
-  allowlisted registry functions.
-- The natural-language agent sends only the user message, workspace paths, registry metadata,
-  and sampled column names/dtypes to the local Ollama server. Source values are not sent.
-- Model output is constrained by a registry-derived JSON schema, then parsed, bound to the
-  explicit source/destination, and validated by the same plan validator used for structured
-  plans. The model cannot add registry operations or arbitrary parameters.
-- Secrets belong in environment variables or a secret store and must be redacted from
-  logs, errors, prompts, reports, and artifacts. Monitoring applies key-based and pattern-based
-  redaction.
-- Source data and user context are untrusted. Profiling never mutates the source, but its
-  quality/info/chunk artifacts can contain source values and must be protected like data.
-- API key authentication and request-size limits are available; rate limiting and production
-  auth hardening are required before broad exposure.
-
-See `documents/security.txt` for the full strategy and `documents/requirements_agent.txt`
-for agent behavior.
+```powershell
+$env:AGENT_ETL_TEST_OLLAMA = "1"
+python -m pytest -q tests/integration/test_nl_ollama_live.py --no-cov
+```
 
 ## Project layout
 
 ```text
 src/
-  domain/
-  application/
-    assessment/
-    logging/
-    planning/
-    ports/
-    profiling/
-    registry/
-    use_cases/
-    validation/
-  infrastructure/
-    assessment/
-    logging/
-    planning/
-    profiling/
-  interfaces/
-  main.py
+  domain/            # entities, errors, invariants
+  application/       # use cases, ports, validation, registry, planning, logging
+  infrastructure/    # adapters: DB, files, Ollama, sandbox, monitoring, profiling
+  interfaces/       # FastAPI app, routes, schemas
+  main.py            # composition root
   COMPONENTS.md
 examples/beta/       # sample input and structured plan
 scripts/beta_smoke.py
@@ -585,21 +358,22 @@ tests/
   integration/
   unit/
 documents/
-  research.txt  # verified current behavior and verification baseline
+  research.txt       # verified behavior and verification baseline
 ```
 
-## Roadmap
+## Documentation
 
-`0.2.0b1` is the first usable beta. `NL-1`, `API-2`, `MON-1`, and `BETA-1` complete the
-natural-language flow: a local Ollama model turns a message into a schema-constrained
-transformation draft, the system binds source/destination deterministically, validates the plan,
-reports questions for missing input, and continues through `/runs/{id}/messages`. Execution
-emits JSONL and transform CSV logs with redaction. The existing validated-plan engine,
-assessment flow, atomic file destinations, transactional PostgreSQL loader, sandbox, and bounded
-workflow remain in place.
+| Document | Contents |
+|---|---|
+| [`CHANGELOG.md`](CHANGELOG.md) | Release notes and known limitations. |
+| [`src/COMPONENTS.md`](src/COMPONENTS.md) | Component map and call sequences. |
+| [`documents/research.txt`](documents/research.txt) | Verified current behavior, gaps, and test baseline. |
+| [`documents/architecture.txt`](documents/architecture.txt) | Layering and runtime boundaries. |
+| [`documents/security.txt`](documents/security.txt) | Security strategy and threat assumptions. |
+| [`documents/requirements_agent.txt`](documents/requirements_agent.txt) | Agent-flow functional requirements. |
+| [`documents/backlog.txt`](documents/backlog.txt) | Delivery status. |
+| [`documents/backlog_v2.txt`](documents/backlog_v2.txt) | Deferred work. |
 
-`TST-1` is partially open: the beta has golden plan-shape tests, security/regression coverage,
-a live Ollama evaluation, and a smoke script, but not the full edge-case matrix. Deferred v2 work
-includes plan-time schema validation, inline source detection, background generation, persistent
-conversations, OpenAI/remote providers, a web UI, PostgreSQL plan destinations, and broader
-profiling. See `documents/backlog_v2.txt`.
+## License
+
+[MIT](LICENSE) © 2026 Erwing Forero Castro.

@@ -357,7 +357,24 @@ async def test_message_only_run_awaits_a_plan() -> None:
     assert body["status"] == "awaiting_clarification"
     assert body["next_action"] == "clarify"
     assert body["questions"]
+    assert "AGENT_ETL_OLLAMA_MODEL" in body["questions"][0]
     assert scheduler.tasks == []
+
+
+@pytest.mark.anyio
+async def test_empty_plan_is_rejected_with_a_clear_message() -> None:
+    manager, _, _ = _build_manager()
+    app = _app(manager)
+
+    response = await _request(
+        app,
+        "POST",
+        "/runs",
+        json={"message": "Do something", "plan": {}},
+    )
+
+    assert response.status_code == 422
+    assert "plan must not be empty" in response.text
 
 
 @pytest.mark.anyio

@@ -7,6 +7,9 @@ name = "agent-etl-builder"
 version = "0.2.0b1"
 description = "Local-first agent for building validated ETL pipelines."
 readme = "README.md"
+license = "MIT"
+authors = [{ name = "Erwing Forero Castro" }]
+keywords = ["etl", "agent", "llm", "ollama", "pandas", "fastapi"]
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.162.0",
@@ -19,6 +22,10 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/erwingforerocastro/Agent-ETL-Builder"
+Changelog = "https://github.com/erwingforerocastro/Agent-ETL-Builder/blob/main/CHANGELOG.md"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/domain", "src/application", "src/infrastructure", "src/interfaces"]
 
@@ -26,7 +33,7 @@ packages = ["src/domain", "src/application", "src/infrastructure", "src/interfac
 "src/main.py" = "main.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "README.md", "pyproject.toml"]
+include = ["src", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

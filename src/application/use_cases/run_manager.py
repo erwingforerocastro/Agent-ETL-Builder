@@ -323,7 +323,7 @@ class RunManager:
         if (
             plan is None
             and self._assessment_intake_factory is not None
-            and _is_source_only(command)
+            and (command.mode == "assessment" or _is_source_only(command))
         ):
             return self._assessment_intake_factory.create(None)
         if plan is None and self._nl_intake_factory is not None:

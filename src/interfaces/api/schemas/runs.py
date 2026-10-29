@@ -47,6 +47,13 @@ class RunCreateRequest(BaseModel):
             raise ValueError("value must not be blank")
         return stripped
 
+    @field_validator("plan")
+    @classmethod
+    def _reject_empty_plan(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is not None and not value:
+            raise ValueError("plan must not be empty; omit plan to use natural-language planning")
+        return value
+
     @model_validator(mode="after")
     def _require_message_or_plan(self) -> RunCreateRequest:
         if self.message is None and self.plan is None:

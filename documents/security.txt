@@ -1,0 +1,223 @@
+# Agent ETL Builder - Security Strategy
+
+Version: 0.8
+Status: Beta 0.2.0b1
+Last updated: 2026-10-29
+Scope: Local-first agent, validated plans, and ETL execution.
+
+## Goals
+
+- Prevent arbitrary code execution and unauthorized data access.
+- Keep secrets and PII out of prompts, logs, reports, and errors.
+- Confine all reads and writes to approved paths.
+- Bound execution time, retries, CPU, memory, and output size.
+- Make every write, DDL, and destructive action explicitly approved.
+
+## Trust boundaries
+
+- User messages and source data are untrusted.
+- LLM output is untrusted until schema and policy validation pass.
+- The module registry is trusted only after review and contract tests.
+- The workspace and sandbox are restricted execution zones.
+- PostgreSQL and remote LLM providers are external systems requiring least privilege.
+
+## Controls
+
+### Planning and validation
+
+- Use Pydantic schemas with unknown fields rejected.
+- Allow only registry-listed operations and functions.
+- Enforce operation roles: sources are read-only, transformations consume pipeline data and
+  declare no side effects, and destinations write.
+- Require transformations to be idempotent and validate cross-parameter rules before execution.
+- Validate required/optional arguments, types, constraints, and dependencies.
+- Resolve paths and require them to stay inside the workspace; reject traversal,
+  symlinks, absolute user paths, reserved names, and overlong paths.
+- Enforce unique step IDs, maximum step count, chunk limits, and plan size.
+- Ignore instructions embedded in data or sample values.
+
+### Execution
+
+- Never use `eval`, `exec`, dynamic imports, shell commands, or generated Python.
+- Run only validated plans through the allowlisted interpreter.
+- Use the v1 in-process sandbox guard: workspace-confined file content access, no network
+  by default, wall-clock timeout, traced-memory limit, and mandatory approval for
+  secret-bearing operations. Read-only runtime paths needed by Python and pandas are
+  allowed. CPU quotas, non-root isolation, hard OOM enforcement, process cleanup, and
+  environment isolation require an external OS/container sandbox and remain deployment
+  hardening items.
+- Require approval for writes, DDL, destructive transformations, and new secret-bearing
+  connections; treat timeout as rejection (a terminal `timed_out` state with no
+  execution). The run workflow derives the requirement from registry policy, not from a
+  self-asserted plan flag.
+- Wait for approval with a bounded timeout. The default is 300 seconds; configure it with
+  `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS`.
+- Read-only assessment may auto-run for workspace files and existing configured read-only
+  connections; new secret-bearing connections require one-time approval. Assessment cannot
+  write to a destination.
+- Source-only assessment requires an explicit `source` reference. `WorkspaceSourceReader`
+  reuses plan path policy to reject absolute paths, traversal, symlinks, reserved names, and
+  paths outside the workspace before reading. Only CSV, JSON, JSONL, and Parquet files are
+  accepted in v1.
+- Confirmation builds only a `save_csv` pipeline plan with a workspace-relative destination,
+  rejects a destination that normalizes to the source path, and runs the normal validator
+  before approval. The source is never overwritten.
+- Support cancellation at approval, step, and retry boundaries; stop on retry exhaustion
+  with an actionable error. A running step is bounded by the sandbox timeout.
+- Clean partial artifacts on non-success terminal paths. Configure `cleanup` or `retain`
+  with `AGENT_ETL_CLEANUP_POLICY`.
+- Treat exported Python as an artifact; never execute it automatically.
+
+### Natural-language planning
+
+- The beta supports local Ollama only. `AGENT_ETL_OLLAMA_BASE_URL` is an HTTP(S) URL without
+  embedded credentials; sending prompts to a non-local host is a deliberate data-egress
+  decision and is not enabled by default.
+- The model receives the user message, workspace source/destination paths, registry metadata,
+  and a 50-row sample of column names/dtypes. It does not receive source values, previews, or
+  secrets. Do not put secrets in the user message.
+- Model output is untrusted. It is constrained by a registry-derived JSON schema, parsed into a
+  `PlanDraft`, bound to the explicit source/destination paths, and passed through the normal
+  plan validator before approval. The model cannot choose a source/destination operation,
+  invent a registry operation, or add arbitrary parameters.
+- Source/destination paths are never taken from model output. Deterministic extension binding
+  and the explicit request fields are authoritative; missing or unsupported paths become
+  clarification questions.
+- Validation failures are fed back for at most the clarification budget. Exhaustion terminates
+  the run; there is no fallback to unvalidated execution.
+- Model timeout, HTTP errors, invalid JSON, empty content, and oversized responses map to
+  `PlanSynthesisError` with a stable code. The model response is not logged.
+- Follow-up messages are bounded to 12 turns in memory and are lost on restart. The API rejects
+  messages after approval and for assessment runs.
+- Prompt injection in the message or source schema cannot add operations or parameters because
+  the JSON schema rejects them. Adversarial prompts still require continuous testing.
+
+### Data and SQL
+
+- File destinations write to a temporary file in the destination directory and atomically
+  replace the final path; a failed write leaves the previous file intact.
+- Parameterize values; allowlist and quote identifiers per dialect.
+- PostgreSQL loads validate schema, table, and column identifiers, batch values, and execute
+  insert/upsert/truncate-insert inside one transaction with full rollback on failure. The
+  loader remains adapter-only until a configured-connection sandbox policy exists.
+- Use read-only credentials for profiling and least-privilege credentials for loads.
+- Use timeouts, bounded batches, transactions, rollback, and idempotent retries.
+- `AGENT_ETL_DATABASE_URL` may contain credentials; it is excluded from `Settings` and
+  `PostgresConfig` reprs and must never be logged or returned by the API. Driver errors
+  expose only the error type and SQLSTATE, not the DSN, SQL text, or parameter values.
+- PostgreSQL TLS is controlled by `AGENT_ETL_DATABASE_SSLMODE` and
+  `AGENT_ETL_DATABASE_SSLROOTCERT`. Use `verify-full` with a trusted root certificate in
+  production; `prefer` provides opportunistic encryption only.
+- Connection and statement timeouts are bounded by configuration. A session is one
+  transaction: success commits, any exception rolls back.
+- Source identities hash credential-free canonical URIs; file content hashes cover bytes and
+  frame hashes cover schema and values. They must never include credentials.
+- `PostgresSourceReader` validates table/column identifiers against a strict pattern, rejects
+  the reserved `pg_` prefix, quotes identifiers, opens read-only transactions, and accepts no
+  raw SQL or `WHERE` expressions yet. PostgreSQL batches use server-side cursors.
+- File readers are read-only. Parquet reads pass a sandbox-guarded file handle to pyarrow;
+  JSON arrays are materialized before chunking and can consume memory proportional to the
+  document.
+- Profiling is read-only toward the source. It writes per-chunk records, a quality CSV, and an
+  info JSON below `artifacts/<run_id>/`; run identifiers are validated and Windows reserved
+  names, trailing dots, separators, and path traversal are rejected before writing. Quality CSV
+  text cells are neutralized against spreadsheet formula injection.
+- Profiling artifacts can contain source values (frequency labels and statistics). Treat them
+  as sensitive and keep them inside the workspace; cleanup follows the run cleanup policy.
+- Core v1 profiling caps exact distinct-value maps, row fingerprints, frequency output, and
+  numeric mode maps. Capped metrics are labelled approximate. Finite numeric values are held
+  in memory for exact median/mode; Parquet spill and sampling are v2 work.
+- Temporary test clusters use local trust authentication and bind only to `127.0.0.1`; they
+  are test fixtures, not a deployment pattern.
+- Assessment executes under the sandbox runner, so workspace, network, timeout, and memory
+  guards apply to source reads, profiling, and artifact writes. V1 uses a full scan.
+  Inline source intent detection, bounded sampling, assessment timeout/background execution,
+  caching, confidence labels, source-change revalidation, draft editing, and database-backed
+  assessment are v2 candidates.
+- Apply equivalent validation to future non-SQL adapters.
+
+### Secrets and PII
+
+- Store credentials in environment variables or a secret store.
+- Redact secrets and PII before prompts, logs, errors, reports, and model calls.
+- Send data to remote models only with consent or after redaction.
+- Do not log raw source data unless explicitly approved.
+
+### Outputs and logs
+
+- Escape all report data; use CSP; do not use external CDNs. The deterministic HTML summary is
+  deferred to the v2 backlog and must meet these controls when added.
+- Neutralize CSV/Excel formula injection in exported cells. Profiling quality CSVs and
+  transform logs apply this.
+- Execution JSONL and transform CSV entries are redacted by key and pattern for passwords,
+  tokens, API keys, DSN credentials, bearer tokens, and `password=`-style assignments.
+- If a monitoring file cannot be written, the event falls back to stderr without changing the
+  pipeline result. A failed log write must not hide the original error.
+- `transform_log.csv` is preserved while other partial artifacts are cleaned up.
+- Log rotation, retention, and cross-process locking are deferred (`MON-2`); the beta assumes
+  one writer per run. Prevent log injection and partial-line corruption.
+- Use atomic writes for artifacts and lock or serialize log writers.
+
+### API and supply chain
+
+- Authentication: set `AGENT_ETL_API_KEY` to require `X-API-Key` on `/runs`; `/health` stays
+  public. Production deployments must also add rate limiting and stronger auth as needed.
+- Request-size limits are enforced from `Content-Length` against
+  `AGENT_ETL_MAX_REQUEST_BYTES`; chunked bodies need an upstream proxy limit.
+- Cancellation is available through `POST /runs/{run_id}/cancel`; execution is scheduled
+  outside the request thread. Clarification follows `POST /runs/{run_id}/messages`; it is
+  rejected after approval and for assessment runs.
+- Natural-language plan generation blocks `POST /runs` for 15-45 seconds with the beta model.
+  Request timeouts and upstream proxy limits should account for this.
+- Use a consistent `{code, message, retryable, details?}` error envelope that does not expose
+  stack traces or internals.
+- Pin dependencies and scan for known vulnerabilities.
+- Document data egress and provider retention before production use.
+
+## OWASP coverage
+
+- OWASP Top 10: access control, injection, insecure design, misconfiguration,
+  vulnerable components, authentication, integrity, logging, and SSRF.
+- OWASP LLM Top 10: prompt injection, insecure output handling, data leakage,
+  excessive agency, supply chain, sensitive information, and unsafe plugin/tool use.
+
+## Security tests
+
+- Path traversal, symlink escape, absolute path, and reserved-name rejection.
+- SQL injection and unsafe identifier tests.
+- Prompt injection and malicious structured-output tests.
+- Sandbox timeout, memory limit, filesystem escape, network attempt, and guard restoration.
+- HTML XSS, CSV formula injection, and log redaction.
+- Approval bypass, approval timeout, cancellation, retry exhaustion, and cleanup failure.
+- Workflow terminal-state transitions, stale plan hashes, and registry-version changes.
+- Assessment source confinement, unsupported/missing sources, full-scan profiling, source
+  overwrite rejection, confirmation validation, and new-connection approval. Sampling limits
+  are v2.
+- API request validation, request-size limits, optional API-key enforcement, unknown runs,
+  state conflicts, and error-envelope non-disclosure.
+- PostgreSQL parameterized reads/writes, read-only transaction enforcement, rollback,
+  statement timeout, TLS mode, and credential-free error context.
+- CSV/JSON/JSONL/Parquet full and chunked reads, stable source/content/schema hashes,
+  deterministic chunk manifests, artifact-name sanitization, and PostgreSQL identifier
+  rejection/quoting.
+- Profiling core merge, schema-drift rejection, capped-map approximation, artifact path
+  rejection, formula-cell neutralization, and source immutability.
+- Secret/PII leakage through errors, logs, reports, and prompts.
+
+## Assumptions and limits
+
+- The local machine is not automatically trusted; least privilege still applies.
+- The v1 sandbox is an in-process Python guard. It serializes guarded calls and blocks the
+  patched file, network, and time APIs, but it is not a security boundary against native
+  extensions or code that bypasses those APIs. OS/container sandboxing must be tested on the
+  target Windows environment before untrusted code is supported.
+- Memory enforcement uses `tracemalloc`, which does not account for all native allocations
+  made by pandas or NumPy. Profiling numeric mode frequency maps are capped, but exact numeric
+  values are retained in memory in v1; large full scans need the v2 spill path.
+- The in-process guard does not create a separate process environment, CPU quota, or user
+  identity. Deployment must keep secrets out of the process environment and add OS-level
+  isolation before running untrusted callables.
+- PostgreSQL TLS mode, certificate verification, credential rotation, connection pooling,
+  and read-only role grants are deployment responsibilities.
+- This strategy must be reviewed before production exposure and re-reviewed when the
+  sandbox, approval, or secret-handling scope changes.

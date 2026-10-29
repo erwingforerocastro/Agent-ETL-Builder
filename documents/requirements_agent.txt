@@ -1,0 +1,377 @@
+# Agent Flow Functional Requirements
+
+NOTE: This is an agent-flow specification, not a Python dependency file.
+Python dependencies belong in `pyproject.toml` (or equivalent).
+
+Version: 1.5
+Scope: v1/beta executes validated plans through an allowlisted interpreter. A local Ollama
+model may propose a schema-constrained transformation draft. Optional Python code export is an
+artifact only and is never executed automatically.
+Last updated: 2026-10-29
+
+V1 implementation note: EXE-1 uses an in-process Python execution guard rather than an
+OS/container sandbox. It confines file content access, blocks network access, bounds
+wall-clock time, and checks traced Python memory. Non-root isolation, CPU quotas, hard OOM
+enforcement, process cleanup, and environment isolation are deferred hardening items.
+WF-1 uses a plain application state machine with a process-local checkpoint port.
+API-1 wires that workflow through FastAPI with background execution, optional API-key
+protection, a request-size limit, and process-local run state/results. The 0.2.0b1 beta adds a
+local Ollama plan builder: a message is converted into a registry-constrained transformation
+draft, source/destination operations are bound deterministically from explicit paths, and
+validation errors drive a bounded repair loop. `POST /runs/{run_id}/messages` continues a
+clarification run. Execution JSONL and transform CSV logs are implemented with redaction and
+stderr fallback. LangGraph remains installed but is not wired into the runtime; plan generation
+is synchronous and local-only in the beta.
+
+<Feature-1>
+    Module registry
+    <Description>
+    Describe available functions, arguments, types, dependencies, side effects, and
+    examples. The registry is the only source of truth for what the agent may call.
+    </Description>
+    <Requirements>
+    - Build a versioned module registry. Entry fields:
+      name, version, module, description, inputs (name/type/required/default/constraints),
+      output schema, dependencies, side_effects, examples, supports_chunking, idempotent,
+      supported_dialects, security_notes.
+    - Allow only approved modules/functions. No dynamic import of arbitrary module paths.
+    - Generate registry entries from callable signatures where possible; add contract
+      tests to prevent drift between registry and code.
+    - Example:
+
+    MODULE_REGISTRY = {
+        "read_csv": {
+            "version": "1.0.0",
+            "module": "ingestion.csv",
+            "description": "Read a CSV file into a DataFrame",
+            "inputs": {
+                "path": {
+                    "type": "str",
+                    "required": True,
+                    "constraints": "workspace-relative path",
+                }
+            },
+            "output": {"type": "DataFrame"},
+            "dependencies": ["pandas"],
+            "side_effects": [],
+            "examples": [{"path": "input.csv"}],
+            "supports_chunking": True,
+            "idempotent": True,
+            "supported_dialects": ["csv"],
+            "security_notes": "Path is confined to the workspace.",
+        },
+        "normalize_dates": {
+            "version": "1.0.0",
+            "module": "transformations.dates",
+            "description": "Convert a column to a specified date format",
+            "inputs": {
+                "column": {"type": "str", "required": True},
+                "output_format": {"type": "str", "required": True},
+            },
+            "output": {"type": "DataFrame"},
+            "dependencies": ["pandas"],
+            "side_effects": [],
+            "examples": [
+                {"column": "col1", "output_format": "%Y-%m-%d"}
+            ],
+            "supports_chunking": True,
+            "idempotent": True,
+        },
+        "save_csv": {
+            "version": "1.0.0",
+            "module": "savers.csv",
+            "description": "Save a DataFrame to a CSV file",
+            "inputs": {
+                "path": {
+                    "type": "str",
+                    "required": True,
+                    "constraints": "workspace-relative path",
+                }
+            },
+            "output": {"type": "str"},
+            "dependencies": ["pandas"],
+            "side_effects": ["writes a file"],
+            "examples": [{"path": "output.csv"}],
+            "supports_chunking": False,
+            "idempotent": False,
+        },
+    }
+    </Requirements>
+    <EdgeCases>
+    - Unknown operation, stale registry entry, signature mismatch, missing dependency.
+    - Untrusted module path, arbitrary import, registry entry not allowlisted.
+    - Missing required input, unknown input, wrong type, invalid default/constraint.
+    - Registry version mismatch between plan and runtime.
+    </EdgeCases>
+</Feature-1>
+
+<Feature-2>
+    Structured plans and validation
+    <Description>
+    The LLM produces a structured pipeline plan, never a complete Python file. The
+    application validates the plan against the registry, schemas, security policy, path
+    allowlist, and approval policy, then executes it through an allowlisted interpreter.
+    </Description>
+    <Requirements>
+    - Plan schema (Pydantic v2, `extra="forbid"`, discriminated unions):
+      {
+          "plan_version": "1.0",
+          "mode": "pipeline",
+          "run_id": "1729850000000-a1b2c3d4",
+          "name": "normalize_orders",
+          "description": "Read orders and normalize dates",
+          "source": {
+              "operation": "read_postgresql",
+              "params": {"table": "orders"}
+          },
+          "transformations": [
+              {
+                  "step_id": "s1",
+                  "operation": "normalize_dates",
+                  "params": {
+                      "column": "order_date",
+                      "output_format": "%Y-%m-%d"
+                  }
+              }
+          ],
+          "destination": {
+              "operation": "save_csv",
+              "params": {"path": "output.csv"}
+          },
+          "chunking": {"enabled": true, "size": 100000},
+          "on_error": "fail_fast",
+          "approval_required": true
+      }
+    - Plan modes: `assessment` is read-only and has no destination; `pipeline` requires a
+      destination. Assessment plans may call only read-only registry operations.
+    - Validation order:
+      1. Mode and schema/type validation with unknown fields rejected.
+      2. Registry lookup and allowlist check.
+      3. Required/optional arguments, constraints, and dependencies.
+      4. Path confinement to the workspace; reject traversal, symlinks, and absolute paths.
+      5. Unique step_id values, maximum step count, and chunk-size limits.
+      6. Security policy: no eval/exec/import/shell/dynamic SQL; safe predicates only.
+      7. Approval policy: writes, DDL, destructive transformations, and new secret-bearing
+         connections require human approval; existing configured read-only assessment
+         connections may auto-run.
+    - Execution: interpret validated plan steps by calling registry functions. Never
+      execute generated Python. Optional code export uses fixed templates only and is
+      never executed automatically.
+    - Bound clarification/repair loops (maximum 3 attempts), execution retries (maximum 2),
+      and enforce execution timeouts and cancellation at approval, step, and retry
+      boundaries.
+    - The default approval timeout is 300 seconds; configure it with
+      `AGENT_ETL_APPROVAL_TIMEOUT_SECONDS`.
+    - Clean partial artifacts on non-success terminal paths. Configure `cleanup` or
+      `retain` with `AGENT_ETL_CLEANUP_POLICY`.
+    - Store the plan, plan hash, registry version, validation result, and approval state
+      for lineage and reproducibility.
+    </Requirements>
+    <EdgeCases>
+    - Unknown operation/parameter, wrong type, missing required value, invalid enum.
+    - Path traversal, symlink escape, absolute path, Windows reserved name, long path.
+    - Excessive steps/chunks, zero/negative chunk size, empty transformation list.
+    - Plan changes mid-conversation; stale plan/registry version; duplicate step IDs.
+    - Assessment plan contains a destination or a write operation.
+    - Prompt injection inside data/sample values; validation must ignore data instructions.
+    - Approval timeout/rejection; cancellation; retry exhaustion.
+    - Plan valid but execution fails; partial outputs must be cleaned up or recorded
+      for recovery.
+    </EdgeCases>
+</Feature-2>
+
+<Feature-3>
+    Source-only assessment and draft planning
+    <Description>
+    When the user provides only a source, validate it and run a read-only assessment to
+    produce a draft pipeline plan. The user confirms the draft and supplies missing inputs
+    before an executable plan is built.
+    </Description>
+    <Requirements>
+    - Detect source-only intent: a source is present, but no destination or transformations
+      are specified.
+    - Build and validate a read-only AssessmentPlan using ingestion, profiling, quality, and
+      info modules. The plan has no destination and may not write.
+    - Auto-run assessment for workspace files and existing configured read-only connections.
+      New secret-bearing connections require one-time approval.
+    - Use a full scan for small sources and a bounded sample for large sources. Record the
+      scope and method; mark sample-based metrics as approximate. A full scan of a large
+      source is optional.
+    - Validate assessment findings and use only validated values for plan synthesis.
+    - Derive candidate transformations from registry modules, with rationale, assumptions,
+      and missing inputs.
+    - If the destination is missing, return a draft plan and request it; never default to a
+      write. On confirmation, build the pipeline plan and run normal validation and approval.
+    - Cache assessment results by content_hash and schema_hash; invalidate on change.
+    </Requirements>
+    <EdgeCases>
+    - Unreadable or unsupported source; schema drift between sample and full scan.
+    - Sampling misses rare issues; label scope and confidence.
+    - Missing or ambiguous destination; multiple candidate destinations.
+    - Assessment timeout or failure; partial artifacts; stale cache.
+    - User edits the draft; plan or registry version changes.
+    </EdgeCases>
+</Feature-3>
+
+<No-Functional-Feature-1>
+    Security
+    <Description>
+    Allow only approved modules/functions. Validate arguments and paths. Never execute
+    arbitrary generated code. Execute only validated plans in a restricted execution
+    guard with resource and time limits.
+    </Description>
+    <Requirements>
+    - Allowlist registry calls; no eval/exec/import/shell/dynamic module loading.
+    - Path confinement: resolve paths and require them to be inside the workspace; reject
+      symlinks and user-controlled absolute paths.
+    - SQL: parameterize values; allowlist/quote identifiers; use read-only credentials for
+      profiling; reject dangerous expressions. Apply equivalent safeguards to future
+      MongoDB adapters.
+    - Read-only assessment may auto-run for workspace files and existing configured read-only
+      connections; new secret-bearing connections require one-time approval.
+    - Sandbox: v1 uses an in-process guard with workspace-confined file content access,
+      no network by default, wall-clock timeout, and a traced-memory check. Read-only
+      runtime paths needed by Python/pandas are allowed. OS/container isolation, CPU
+      quotas, hard OOM enforcement, process cleanup, and environment isolation are
+      deferred hardening items; see the v1 implementation note above.
+    - Redact secrets/PII from prompts, logs, errors, reports, and monitoring files.
+    - HTML reports: escape all data, use CSP, and avoid external CDNs.
+    - Treat file contents and user context as untrusted; defend against prompt injection.
+    - Cover OWASP Top 10 and OWASP LLM Top 10; pin/scan dependencies; add auth and rate
+      limits to the API.
+    - Local Ollama vs OpenAI: document data egress and obtain consent or redact samples
+      before sending data to a remote model.
+    </Requirements>
+    <EdgeCases>
+    - Sandbox escape, timeout, OOM, fork bomb, disk exhaustion, network attempt.
+    - Secret leakage through exceptions, logs, HTML, or model prompts.
+    - Malicious CSV/JSON/HTML values; formula injection; XSS; path traversal.
+    - Assessment plan attempts a write; sample-only findings are overstated.
+    - Model returns an unsafe operation or parameter; validation must reject it.
+    - Credential rotation, invalid TLS, and least-privilege failures.
+    </EdgeCases>
+</No-Functional-Feature-1>
+
+<No-Functional-Feature-2>
+    Testing and validation
+    <Description>
+    Use Pydantic schemas for plans, type checking, pytest for module tests, and integration
+    tests for complete pipelines. Validate plans and exported code before any use.
+    </Description>
+    <Requirements>
+    - Pydantic schemas, pytest, ruff/formatting, and mypy or pyright.
+    - Golden plans and a curated request set with expected module selection, parameters,
+      and outputs, including source-only assessment and draft-plan requests.
+    - Security tests: path traversal, SQL injection, prompt injection, sandbox limits,
+      HTML escaping, and log redaction.
+    - Integration tests with temporary files and a PostgreSQL test instance; unit tests must
+      not require network access.
+    - Test exported code only as an artifact; never execute it in tests or production.
+    - Coverage target: 80% for core modules; every error path and edge case must be tested.
+    - Include regression tests for every fixed bug and every new edge case.
+    </Requirements>
+    <EdgeCases>
+    - Flaky tests due to time/order/random IDs; use a fixed clock, seeds, and stable sorting.
+    - Windows/Linux path differences; cleanup of temp directories; port collisions.
+    - PostgreSQL test instance unavailable; skip with an explicit marker, never silently pass.
+    - Test data containing PII or secrets; use synthetic fixtures only.
+    </EdgeCases>
+</No-Functional-Feature-2>
+
+<No-Functional-Feature-3>
+    State and data lineage
+    <Description>
+    Track input datasets, selected modules, parameters, output files, execution status,
+    approvals, and errors. Persist pipeline definitions and versions so users can
+    reproduce previous runs.
+    </Description>
+    <Requirements>
+    - Identifiers: source_id (stable canonical hash), run_id (Unix epoch ms + random
+      suffix), step_id (unique per plan), and artifact_id.
+    - Persist plan version/hash, registry version, model/prompt version, input/output
+      hashes, parameters, selected modules, status, errors, duration, and token/cost
+      metrics.
+    - Use a process-local checkpoint port for v1. Workflow runs use
+      `InMemoryRunCheckpoint`; LangGraph's `InMemorySaver` remains available for future
+      graph-based workflows. Checkpoints are lost on restart; persist lineage and artifacts
+      separately. Add a persistent PostgreSQL checkpoint in a later version.
+    - Persist per-chunk manifests and merge results; support in-process retry and
+      idempotency, with no cross-restart resume in v1.
+    - Persist assessment scope (sample/full), findings, draft plan, and missing inputs.
+    - Version pipeline definitions; define retention, deletion, and migration policy.
+    </Requirements>
+    <EdgeCases>
+    - Process restart loses in-memory checkpoints; no crash resume in v1.
+    - Partial chunk/load; concurrent runs/users; schema migration failure; retention.
+    - Duplicate run_id; state/result divergence; orphaned artifacts.
+    </EdgeCases>
+</No-Functional-Feature-3>
+
+<No-Functional-Feature-4>
+    Observability and evaluation
+    <Description>
+    Log the user request, chosen modules, plan, validation results, execution duration,
+    failures, approvals, and token/cost metrics. Evaluate whether the agent selects the
+    correct modules and produces the expected output.
+    </Description>
+    <Requirements>
+    - Log request, plan, validation, registry version, model/prompt version, durations,
+      failures, tokens/cost, trace_id, and approval decisions.
+    - Log assessment scope, draft-plan decisions, and missing inputs.
+    - Local Ollama cost is zero; still record model name, latency, and token counts.
+    - Emit metrics and traces; optionally add dashboards/alerts.
+    - Evaluation set: curated requests, expected plans/outputs, module selection,
+      regression tests, and adversarial prompts.
+    - Redact secrets/PII; do not log raw source data unless explicitly approved.
+    - Version the evaluation set when the registry, model, or prompt changes.
+    </Requirements>
+    <EdgeCases>
+    - Log volume/rotation; PII; cost spikes; rate limits; model fallback.
+    - Evaluation drift when registry/model changes; stale expected plans.
+    - Partial telemetry outages; clock skew; trace IDs missing.
+    </EdgeCases>
+</No-Functional-Feature-4>
+
+<Contracts>
+- API (FastAPI) recommended endpoints:
+  * POST /runs: create a run from a user message, source-only request, or validated plan;
+    returns run_id/status.
+  * GET /runs/{run_id}: status, plan, assessment, draft plan, validation result, usage.
+  * POST /runs/{run_id}/approve: approval/rejection decision.
+  * POST /runs/{run_id}/cancel: request cancellation.
+  * GET /runs/{run_id}/logs: transform and execution logs.
+  * GET /health: liveness/readiness.
+- Error envelope: {code, message, retryable, details?}; no secrets.
+- API controls: authentication, request-size limits, rate limits, background execution,
+  cancellation, and OpenAPI documentation.
+- State schema: thread_id, run_id, mode, plan, plan_hash, registry_version, status, attempt,
+  approval_state, clarification_attempts, questions, missing_inputs, error, created_at,
+  updated_at. `assessment_id` and a persisted checkpoint id are added with ASM-1 and the
+  persistent-checkpoint work.
+- All contracts are versioned; breaking changes require a new version.
+</Contracts>
+
+<DefinitionOfDone>
+A step is done only when:
+- plan/schema/registry/security/path validation passes;
+- unit, integration, edge-case, security, and regression tests pass;
+- lint, formatting, and type checks pass; coverage target for core modules is met;
+- execution is bounded by timeout, retry, cancellation, and approval rules;
+- source-only assessment, draft-plan, and missing-input paths are tested when applicable;
+- lineage, transform log, execution log, and metrics are recorded and redacted;
+- docs, examples, and manual test instructions are updated;
+- no secrets/PII are exposed; dependencies are pinned and scanned.
+</DefinitionOfDone>
+
+<CrossCuttingEdgeCases>
+- Unknown operations/arguments; path escapes; excessive plan size; duplicate step IDs.
+- Prompt injection from data or user context; the plan validator must ignore data instructions.
+- Ollama vs OpenAI structured-output differences; invalid JSON; bounded retries.
+- Model unavailable, rate-limited, or returning unsafe operations.
+- Token/context limits; context summarization and registry retrieval.
+- Nondeterminism from temperature, IDs, ordering, and timestamps.
+- Process restart loses state; concurrent runs; duplicate run_id.
+- Sampling vs full-scan mismatch; draft plan missing a destination.
+- Approval timeout/rejection; cancellation; sandbox timeout/OOM; partial outputs.
+- PII/secrets in prompts, logs, reports, and errors.
+</CrossCuttingEdgeCases>

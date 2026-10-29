@@ -39,11 +39,17 @@ class AssessmentPlanIntake:
                 missing_inputs=("source",),
             )
         if request.mode == "assessment":
+            questions = [
+                "Assessment complete. Submit a structured pipeline plan to write output.",
+            ]
+            if request.destination is not None:
+                questions.append(
+                    "Assessment mode is read-only; the destination was ignored. "
+                    "Use mode 'pipeline' to write output."
+                )
             return PlanIntakeResult(
                 assessment=report,
-                questions=(
-                    "Assessment complete. Submit a structured pipeline plan to write output.",
-                ),
+                questions=tuple(questions),
             )
         return PlanIntakeResult(
             assessment=report,
