@@ -32,7 +32,6 @@ def _report() -> ProfileReport:
     record = profiler.profile_chunk(
         pd.DataFrame({"id": [1, 2], "name": ["Ada", ""]}),
         chunk_index=0,
-        request=request,
     )
     return profiler.merge([record], request=request)
 
@@ -44,7 +43,6 @@ def _write_report(tmp_path: Path) -> tuple[ProfileReport, FilesystemProfileWrite
     record = profiler.profile_chunk(
         pd.DataFrame({"id": [1, 2], "name": ["Ada", ""]}),
         chunk_index=0,
-        request=request,
     )
     writer.write_chunk(request, record)
     report = profiler.merge([record], request=request)
@@ -127,7 +125,6 @@ def test_chunk_identifier_is_rejected(tmp_path: Path) -> None:
     record = profiler.profile_chunk(
         pd.DataFrame({"id": [1]}),
         chunk_index=0,
-        request=request,
     )
 
     with pytest.raises(ProfilingError) as caught:

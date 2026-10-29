@@ -7,7 +7,7 @@ source-only assessment.
 complete. Five transformations are registered in the versioned allowlist, structured plans are
 validated before execution, and the bounded run workflow handles intake, approval, execution,
 retries, cancellation, and cleanup. The FastAPI run contract exposes the workflow with
-background execution. PostgreSQL connectivity, read-only ingestion adapters, and mergeable
+background execution. PostgreSQL connectivity, read-only ingestion adapters, and core
 quality profiling are available. The sandbox is an in-process guard; OS-level isolation remains
 deferred. Additional transformation batches remain in progress.
 
@@ -172,8 +172,8 @@ filter expressions are also not accepted yet.
 
 ## Profiling and quality
 
-`ProfileSourceUseCase` consumes ordered chunks, writes one mergeable record per chunk, merges
-the records, and writes:
+`ProfileSourceUseCase` consumes ordered full-source chunks, writes one mergeable record per
+chunk, merges the records, and writes:
 
 | Artifact | Path |
 |---|---|
@@ -181,36 +181,27 @@ the records, and writes:
 | Schema, statistics, and metadata | `artifacts/<run_id>/<source_id>_<source_type>_info.json` |
 | Per-chunk records | `artifacts/<run_id>/<source_id>_<source_type>_profile_chunk_<index>.json` |
 
-Quality metrics use explicit formulas:
+The v1 profile reports:
 
-- column/row/dataset completeness = non-null and non-empty values / total values;
-- duplicate rows = distinct row fingerprints / total rows;
-- column uniqueness = distinct present values / present values;
-- declared rules: required, regex, range, domain, type, cross-column compare, and unique key;
-- accuracy = `N/A (formula not provided)`.
+- column/row/dataset completeness;
+- duplicate rows and column uniqueness;
+- numeric mean, median, multi-valued mode, min/max, and non-finite counts;
+- date min/max/range for datetime-typed columns;
+- categorical frequency tables including null and empty categories;
+- accuracy as `N/A (formula not provided)`;
+- consistency and validity as `N/A` until declared-rule evaluation arrives in v2.
 
-The merge state is additive and exact where exactness is possible: row/null/empty counts,
-numeric count/sum/min/max, finite values for mean/median/multi-valued mode, date min/max/range,
-exact frequency maps, and row/key fingerprints. It never merges averages of averages or medians
-of medians. In the composition root, finite numeric values are written as sorted temporary
-Parquet files under the run folder and merged as a sorted stream; a standalone profiler
-constructed without a spill store keeps values in chunk state. Date statistics currently cover
-datetime-typed columns; date-like strings should be cast or covered by an explicit type rule.
+Merging uses additive counts, exact finite values, date boundaries, frequency maps, and row
+fingerprints. It never computes a final average from averages or a median from per-chunk
+medians. Numeric values and maps are currently retained in memory; bounded sampling and
+Parquet spill/external sort are tracked in the v2 backlog.
 
-`ProfileRequest` carries the run/source identity, scope (`full` or `sample`), method, merge
-method, thresholds, rules, and limits. Bounded samples must set `scope=sample` and
-`approximate=true`; sampling itself is supplied by the assessment caller. `ProfileLimits`
-bounds distinct-value maps, row fingerprints, and frequency output. Any capped metric is
-marked approximate (`warn` unless it also fails its threshold). `ProfileThresholds` sets
-minimum acceptable ratios per quality family. Numeric mode frequency maps use the same
-distinct-value cap; a capped mode is omitted and marked approximate.
-
-Chunks are accepted only when their column names/order match and their inferred types are
-compatible. Numeric int/float drift and all-null chunks are merged; incompatible categorical,
-numeric, or naive/aware datetime mixes raise `PROFILE_SCHEMA_DRIFT`. Per-chunk records,
-temporary numeric spill files, and final artifacts live in the run folder and follow the
-cleanup policy. The deterministic HTML summary and optional narrative are not wired yet;
-PRF-1 provides the validated quality/info artifacts they will consume.
+`ProfileRequest` carries only the run/source identity, chunk metadata, and an optional content
+hash. `ProfileLimits` bounds tracked distinct values, row fingerprints, and frequency output;
+capped results are marked approximate. Chunks must share column order and compatible inferred
+types; incompatible categorical/numeric/date mixes or naive/aware datetime mixes raise
+`PROFILE_SCHEMA_DRIFT`. Per-chunk and final artifacts live in the run folder and follow the
+cleanup policy. The deterministic HTML summary and optional narrative are v2 work.
 
 ## Implemented transformations
 
@@ -412,7 +403,8 @@ documents/
 before execution, the sandbox enforces workspace, network, timeout, and memory limits, the
 workflow bounds clarification, approval, retries, cancellation, and cleanup, PostgreSQL
 sessions are parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL reads are
-chunked with stable identifiers, quality/info metrics merge from per-chunk state, and the
-FastAPI run contract executes runs in the background. The next P1 backlog item is `ASM-1`
-(source-only assessment and draft plan); `RPT-1` tracks the deterministic HTML summary.
-Additional `TRN-0` transformation batches remain in progress.
+chunked with stable identifiers, core quality/info metrics merge from per-chunk state, and the
+FastAPI run contract executes runs in the background. The next v1 item is `ASM-1`
+(source-only assessment and draft plan). Advanced profiling, sampling, reporting, and future
+adapters are tracked in `documents/backlog_v2.txt`. Additional `TRN-0` transformation batches
+remain in progress.

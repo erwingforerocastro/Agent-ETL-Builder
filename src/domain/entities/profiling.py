@@ -17,6 +17,7 @@ from domain.entities.ingestion import SOURCE_TYPES, SourceType
 
 PROFILE_SCHEMA_VERSION: Final[str] = "1.0.0"
 METRIC_DEFINITION_VERSION: Final[str] = "1.0.0"
+DEFAULT_MERGE_METHOD: Final[str] = "additive_counts+exact_values+frequency_maps+row_hashes"
 
 
 class MetricFamily(StrEnum):
@@ -35,7 +36,6 @@ class MetricScope(StrEnum):
     COLUMN = "column"
     ROW = "row"
     DATASET = "dataset"
-    RULE = "rule"
 
 
 class MetricStatus(StrEnum):
@@ -45,30 +45,6 @@ class MetricStatus(StrEnum):
     FAIL = "fail"
     WARN = "warn"
     NOT_APPLICABLE = "not_applicable"
-    ERROR = "error"
-
-
-class ProfileScope(StrEnum):
-    """Whether the profile covered the full source or a bounded sample."""
-
-    FULL = "full"
-    SAMPLE = "sample"
-
-
-class RuleKind(StrEnum):
-    """Supported declared quality rules."""
-
-    REQUIRED = "required"
-    UNIQUE_KEY = "unique_key"
-    REGEX = "regex"
-    RANGE = "range"
-    DOMAIN = "domain"
-    TYPE = "type"
-    COMPARE = "compare"
-
-
-_RULE_TYPES: Final[frozenset[str]] = frozenset({"integer", "number", "date", "string"})
-_COMPARE_OPERATORS: Final[frozenset[str]] = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
 
 
 def _require_ratio(value: float, field_name: str) -> None:
@@ -79,93 +55,6 @@ def _require_ratio(value: float, field_name: str) -> None:
 def _require_finite(value: float, field_name: str) -> None:
     if not math.isfinite(value):
         raise ValueError(f"{field_name} must be finite")
-
-
-@dataclass(frozen=True, slots=True)
-class QualityRule:
-    """One explicitly declared consistency, validity, or uniqueness rule."""
-
-    rule_id: str
-    kind: RuleKind
-    columns: tuple[str, ...]
-    threshold: float | None = None
-    pattern: str | None = None
-    minimum: float | None = None
-    maximum: float | None = None
-    allowed_values: tuple[str, ...] = ()
-    expected_type: str | None = None
-    operator: str | None = None
-
-    def __post_init__(self) -> None:
-        require_text(self.rule_id, "rule_id")
-        if not isinstance(self.kind, RuleKind):
-            raise ValueError("kind must be a RuleKind")
-        object.__setattr__(self, "columns", tuple(self.columns))
-        object.__setattr__(self, "allowed_values", tuple(self.allowed_values))
-        if not self.columns:
-            raise ValueError("rule columns must not be empty")
-        if any(not column.strip() for column in self.columns):
-            raise ValueError("rule columns must not be blank")
-        if len(set(self.columns)) != len(self.columns):
-            raise ValueError("rule columns must be unique")
-        if self.threshold is not None:
-            _require_ratio(self.threshold, "threshold")
-        for value, name in ((self.minimum, "minimum"), (self.maximum, "maximum")):
-            if value is not None:
-                _require_finite(value, name)
-        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
-            raise ValueError("minimum must not exceed maximum")
-        if any(not item.strip() for item in self.allowed_values):
-            raise ValueError("allowed_values must not contain blank values")
-
-        single_column_rules = {
-            RuleKind.REQUIRED,
-            RuleKind.REGEX,
-            RuleKind.RANGE,
-            RuleKind.DOMAIN,
-            RuleKind.TYPE,
-        }
-        if self.kind in single_column_rules and len(self.columns) != 1:
-            raise ValueError(f"{self.kind.value} rules require exactly one column")
-        if self.kind is RuleKind.UNIQUE_KEY and len(self.columns) < 1:
-            raise ValueError("unique_key rules require at least one column")
-        if self.kind is RuleKind.COMPARE:
-            if len(self.columns) != 2:
-                raise ValueError("compare rules require exactly two columns")
-            if self.operator not in _COMPARE_OPERATORS:
-                raise ValueError(f"unsupported compare operator: {self.operator}")
-        elif self.operator is not None:
-            raise ValueError("operator is only valid for compare rules")
-        if self.kind is RuleKind.REGEX:
-            if self.pattern is None or not self.pattern.strip():
-                raise ValueError("regex rules require a pattern")
-        elif self.pattern is not None:
-            raise ValueError("pattern is only valid for regex rules")
-        if self.kind is RuleKind.RANGE:
-            if self.minimum is None and self.maximum is None:
-                raise ValueError("range rules require minimum or maximum")
-        elif self.minimum is not None or self.maximum is not None:
-            raise ValueError("minimum/maximum are only valid for range rules")
-        if self.kind is RuleKind.DOMAIN:
-            if not self.allowed_values:
-                raise ValueError("domain rules require allowed_values")
-        elif self.allowed_values:
-            raise ValueError("allowed_values are only valid for domain rules")
-        if self.kind is RuleKind.TYPE:
-            if self.expected_type not in _RULE_TYPES:
-                raise ValueError(f"unsupported expected_type: {self.expected_type}")
-        elif self.expected_type is not None:
-            raise ValueError("expected_type is only valid for type rules")
-
-    @property
-    def family(self) -> MetricFamily:
-        if self.kind is RuleKind.REQUIRED:
-            return MetricFamily.COMPLETENESS
-        if self.kind is RuleKind.UNIQUE_KEY:
-            return MetricFamily.UNIQUENESS
-        if self.kind is RuleKind.COMPARE:
-            return MetricFamily.CONSISTENCY
-        return MetricFamily.VALIDITY
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,13 +73,11 @@ class MetricResult:
     formula: str
     details: Mapping[str, object] = field(default_factory=dict)
     approximate: bool = False
-    definition_version: str = METRIC_DEFINITION_VERSION
 
     def __post_init__(self) -> None:
         require_text(self.metric, "metric")
         require_text(self.subject, "subject")
         require_text(self.formula, "formula")
-        require_text(self.definition_version, "definition_version")
         if not isinstance(self.family, MetricFamily):
             raise ValueError("family must be a MetricFamily")
         if not isinstance(self.scope, MetricScope):
@@ -226,7 +113,6 @@ class MetricResult:
             "threshold": self.threshold,
             "status": self.status.value,
             "formula": self.formula,
-            "definition_version": self.definition_version,
             "approximate": self.approximate,
             "details": dict(self.details),
         }
@@ -239,7 +125,6 @@ class ProfileWarning:
     code: str
     message: str
     column: str | None = None
-    rule_id: str | None = None
     details: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -247,8 +132,6 @@ class ProfileWarning:
         require_text(self.message, "message")
         if self.column is not None and not self.column.strip():
             raise ValueError("column must not be blank when provided")
-        if self.rule_id is not None and not self.rule_id.strip():
-            raise ValueError("rule_id must not be blank when provided")
         object.__setattr__(self, "details", dict(self.details or {}))
 
     def to_dict(self) -> dict[str, object]:
@@ -256,7 +139,6 @@ class ProfileWarning:
             "code": self.code,
             "message": self.message,
             "column": self.column,
-            "rule_id": self.rule_id,
             "details": dict(self.details),
         }
 
@@ -295,34 +177,20 @@ class ChunkNumericState:
     maximum: float | None
     values: tuple[float, ...]
     non_finite_count: int = 0
-    values_ref: str | None = None
 
     def __post_init__(self) -> None:
         require_non_negative_int(self.count, "count")
         require_non_negative_int(self.non_finite_count, "non_finite_count")
         object.__setattr__(self, "values", tuple(self.values))
+        if self.count != len(self.values):
+            raise ValueError("numeric count must match values")
         _require_finite(self.total, "total")
         for value in self.values:
             _require_finite(value, "numeric value")
-        if self.values_ref is not None:
-            require_text(self.values_ref, "values_ref")
-            if self.values:
-                raise ValueError("numeric state must hold values or a spill reference")
-            if self.count == 0:
-                raise ValueError("a spill reference requires at least one numeric value")
-        elif self.count != len(self.values):
-            raise ValueError("numeric count must match values")
-        if self.count == 0:
-            if self.minimum is not None or self.maximum is not None:
-                raise ValueError("empty numeric state must not have minimum/maximum")
-        elif self.minimum is None or self.maximum is None:
-            raise ValueError("numeric state must provide minimum and maximum")
         if self.values and (self.minimum != min(self.values) or self.maximum != max(self.values)):
             raise ValueError("numeric minimum/maximum must match values")
-        if self.minimum is not None:
-            _require_finite(self.minimum, "minimum")
-        if self.maximum is not None:
-            _require_finite(self.maximum, "maximum")
+        if not self.values and (self.minimum is not None or self.maximum is not None):
+            raise ValueError("empty numeric state must not have minimum/maximum")
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,7 +245,6 @@ class ChunkColumnState:
     dates: ChunkDateState | None = None
     values: tuple[ValueCount, ...] = ()
     values_capped: bool = False
-    failed: bool = False
 
     def __post_init__(self) -> None:
         require_text(self.name, "name")
@@ -385,8 +252,6 @@ class ChunkColumnState:
         require_non_negative_int(self.row_count, "row_count")
         require_non_negative_int(self.null_count, "null_count")
         require_non_negative_int(self.empty_count, "empty_count")
-        if not isinstance(self.failed, bool):
-            raise ValueError("failed must be a boolean")
         if self.null_count + self.empty_count > self.row_count:
             raise ValueError("null and empty counts must not exceed row_count")
         object.__setattr__(self, "values", tuple(self.values))
@@ -399,33 +264,6 @@ class ChunkColumnState:
 
 
 @dataclass(frozen=True, slots=True)
-class RuleChunkState:
-    """Mergeable counts or key hashes for one declared rule."""
-
-    rule_id: str
-    numerator: int
-    denominator: int
-    key_hashes: tuple[str, ...] = ()
-    key_hashes_capped: bool = False
-
-    def __post_init__(self) -> None:
-        require_text(self.rule_id, "rule_id")
-        require_non_negative_int(self.numerator, "numerator")
-        require_non_negative_int(self.denominator, "denominator")
-        if self.numerator > self.denominator:
-            raise ValueError("numerator must not exceed denominator")
-        object.__setattr__(self, "key_hashes", tuple(self.key_hashes))
-        if any(not value.strip() for value in self.key_hashes):
-            raise ValueError("key hashes must not be blank")
-        if self.key_hashes and self.numerator != len(set(self.key_hashes)):
-            raise ValueError("key-hash numerator must match the chunk's distinct keys")
-        if self.key_hashes and self.denominator < len(self.key_hashes):
-            raise ValueError("key-hash denominator must cover the chunk's keys")
-        if not isinstance(self.key_hashes_capped, bool):
-            raise ValueError("key_hashes_capped must be a boolean")
-
-
-@dataclass(frozen=True, slots=True)
 class ChunkProfile:
     """Per-chunk profiling record suitable for later merging."""
 
@@ -435,7 +273,6 @@ class ChunkProfile:
     columns: tuple[ChunkColumnState, ...]
     row_hashes: tuple[str, ...] = ()
     row_hashes_capped: bool = False
-    rules: tuple[RuleChunkState, ...] = ()
     warnings: tuple[ProfileWarning, ...] = ()
 
     def __post_init__(self) -> None:
@@ -446,15 +283,12 @@ class ChunkProfile:
             raise ValueError("complete_rows must not exceed row_count")
         object.__setattr__(self, "columns", tuple(self.columns))
         object.__setattr__(self, "row_hashes", tuple(self.row_hashes))
-        object.__setattr__(self, "rules", tuple(self.rules))
         object.__setattr__(self, "warnings", tuple(self.warnings))
         names = [column.name for column in self.columns]
         if len(names) != len(set(names)):
             raise ValueError("column names must be unique")
         if any(not value.strip() for value in self.row_hashes):
             raise ValueError("row hashes must not be blank")
-        if len({rule.rule_id for rule in self.rules}) != len(self.rules):
-            raise ValueError("rule ids must be unique per chunk")
         if not isinstance(self.row_hashes_capped, bool):
             raise ValueError("row_hashes_capped must be a boolean")
 
@@ -481,7 +315,6 @@ class ChunkProfile:
                             "minimum": column.numeric.minimum,
                             "maximum": column.numeric.maximum,
                             "values": list(column.numeric.values),
-                            "values_ref": column.numeric.values_ref,
                             "non_finite_count": column.numeric.non_finite_count,
                         }
                     ),
@@ -508,19 +341,8 @@ class ChunkProfile:
                         for item in column.values
                     ],
                     "values_capped": column.values_capped,
-                    "failed": column.failed,
                 }
                 for column in self.columns
-            ],
-            "rules": [
-                {
-                    "rule_id": rule.rule_id,
-                    "numerator": rule.numerator,
-                    "denominator": rule.denominator,
-                    "key_hashes": list(rule.key_hashes),
-                    "key_hashes_capped": rule.key_hashes_capped,
-                }
-                for rule in self.rules
             ],
             "warnings": [warning.to_dict() for warning in self.warnings],
         }
@@ -556,13 +378,12 @@ class NumericStatistics:
 
 @dataclass(frozen=True, slots=True)
 class DateTimeStatistics:
-    """Final date summary with ISO 8601 boundaries and duration."""
+    """Final date summary with ISO 8601 boundaries."""
 
     count: int
     minimum: str | None
     maximum: str | None
     range_seconds: float | None
-    range_iso: str | None = None
     timezone: str | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -571,7 +392,6 @@ class DateTimeStatistics:
             "minimum": self.minimum,
             "maximum": self.maximum,
             "range_seconds": self.range_seconds,
-            "range_iso": self.range_iso,
             "timezone": self.timezone,
         }
 
@@ -648,22 +468,19 @@ class ProfileReport:
     row_count: int
     chunk_count: int
     chunk_size: int
-    scope: ProfileScope
-    method: str
-    merge_method: str
     approximate: bool
     columns: tuple[ColumnStatistics, ...]
     metrics: tuple[MetricResult, ...]
     warnings: tuple[ProfileWarning, ...] = ()
     content_hash: str | None = None
     schema_hash: str | None = None
+    merge_method: str = DEFAULT_MERGE_METHOD
     metric_definition_version: str = METRIC_DEFINITION_VERSION
 
     def __post_init__(self) -> None:
         for value, name in (
             (self.run_id, "run_id"),
             (self.source_id, "source_id"),
-            (self.method, "method"),
             (self.merge_method, "merge_method"),
             (self.metric_definition_version, "metric_definition_version"),
         ):
@@ -673,8 +490,6 @@ class ProfileReport:
         require_non_negative_int(self.row_count, "row_count")
         require_non_negative_int(self.chunk_count, "chunk_count")
         require_positive_int(self.chunk_size, "chunk_size")
-        if not isinstance(self.scope, ProfileScope):
-            raise ValueError("scope must be a ProfileScope")
         if not isinstance(self.approximate, bool):
             raise ValueError("approximate must be a boolean")
         object.__setattr__(self, "columns", tuple(self.columns))
@@ -703,8 +518,8 @@ class ProfileReport:
                 "row_count": self.row_count,
             },
             "profile": {
-                "scope": self.scope.value,
-                "method": self.method,
+                "scope": "full",
+                "method": "streaming_chunks",
                 "approximate": self.approximate,
                 "chunk_merge_method": self.merge_method,
                 "chunk_count": self.chunk_count,
@@ -719,6 +534,7 @@ class ProfileReport:
 
 
 __all__ = [
+    "DEFAULT_MERGE_METHOD",
     "METRIC_DEFINITION_VERSION",
     "PROFILE_SCHEMA_VERSION",
     "CategoricalStatistics",
@@ -734,10 +550,6 @@ __all__ = [
     "MetricStatus",
     "NumericStatistics",
     "ProfileReport",
-    "ProfileScope",
     "ProfileWarning",
-    "QualityRule",
-    "RuleChunkState",
-    "RuleKind",
     "ValueCount",
 ]

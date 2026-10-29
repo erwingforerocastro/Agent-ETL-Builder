@@ -11,10 +11,9 @@ from application.profiling.models import (
     ProfileArtifacts,
     ProfileLimits,
     ProfileRequest,
-    ProfileThresholds,
 )
 from application.use_cases.profile_source import ProfileSourceUseCase
-from domain.entities.profiling import ChunkProfile, ProfileReport, ProfileScope
+from domain.entities.profiling import ChunkProfile, ProfileReport
 
 
 class _FakeProfiler:
@@ -28,10 +27,8 @@ class _FakeProfiler:
         chunk: object,
         *,
         chunk_index: int,
-        request: ProfileRequest,
     ) -> ChunkProfile:
         self.calls.append((chunk_index, str(chunk)))
-        assert request.chunk_size > 0
         return ChunkProfile(
             chunk_index=chunk_index,
             row_count=1,
@@ -54,10 +51,7 @@ class _FakeProfiler:
             row_count=len(chunks),
             chunk_count=len(chunks),
             chunk_size=request.chunk_size,
-            scope=request.scope,
-            method=request.method,
-            merge_method=request.merge_method,
-            approximate=request.approximate,
+            approximate=False,
             columns=(),
             metrics=(),
         )
@@ -92,10 +86,7 @@ def _request() -> ProfileRequest:
         run_id="run-1",
         source_id="src_abc",
         source_type="csv",
-        scope=ProfileScope.FULL,
         chunk_size=2,
-        thresholds=ProfileThresholds(),
-        limits=ProfileLimits(),
     )
 
 
@@ -107,9 +98,9 @@ def test_profiles_each_chunk_before_merging_and_writing() -> None:
     writer.events = events
     original_profile = profiler.profile_chunk
 
-    def profile(chunk: object, *, chunk_index: int, request: ProfileRequest) -> ChunkProfile:
+    def profile(chunk: object, *, chunk_index: int) -> ChunkProfile:
         events.append(f"profile:{chunk_index}")
-        return original_profile(chunk, chunk_index=chunk_index, request=request)
+        return original_profile(chunk, chunk_index=chunk_index)
 
     profiler.profile_chunk = profile  # type: ignore[method-assign]
     use_case = ProfileSourceUseCase(profiler, writer)
@@ -138,14 +129,8 @@ def test_empty_chunk_stream_still_writes_a_report() -> None:
 
 def test_profiler_failure_stops_writing() -> None:
     class FailingProfiler(_FakeProfiler):
-        def profile_chunk(
-            self,
-            chunk: object,
-            *,
-            chunk_index: int,
-            request: ProfileRequest,
-        ) -> ChunkProfile:
-            del chunk, chunk_index, request
+        def profile_chunk(self, chunk: object, *, chunk_index: int) -> ChunkProfile:
+            del chunk, chunk_index
             raise RuntimeError("boom")
 
     writer = _FakeWriter()
@@ -158,7 +143,10 @@ def test_profiler_failure_stops_writing() -> None:
 
 
 def test_request_rejects_invalid_profiling_policy() -> None:
-    with pytest.raises(ValueError, match="sample profiles"):
-        replace(_request(), scope=ProfileScope.SAMPLE)
-    with pytest.raises(ValueError, match="rules"):
-        replace(_request(), rules=(object(),))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="content_hash"):
+        replace(_request(), content_hash=" ")
+    with pytest.raises(ValueError, match="chunk_size"):
+        replace(_request(), chunk_size=0)
+    assert ProfileLimits(max_tracked_values=1).max_tracked_values == 1
+    with pytest.raises(ValueError, match="max_tracked_values"):
+        ProfileLimits(max_tracked_values=0)

@@ -4,7 +4,6 @@ from pathlib import Path
 
 from application.registry.specs import MODULE_SPECS
 from application.use_cases.execute_plan import ExecutePlanUseCase
-from application.use_cases.profile_source import ProfileSourceUseCase
 from application.use_cases.run_manager import RunManager
 from application.use_cases.run_workflow_factory import RunWorkflowFactory
 from application.validation.plan_validator import PlanValidator
@@ -19,9 +18,6 @@ from infrastructure.database.postgres import PostgresDatabase
 from infrastructure.interpreter.registry_step_runner import RegistryStepRunner
 from infrastructure.logging.run_log import InMemoryRunLog
 from infrastructure.planning.submitted import SubmittedPlanIntakeFactory
-from infrastructure.profiling.artifacts import FilesystemProfileWriter
-from infrastructure.profiling.pandas_profiler import PandasChunkProfiler
-from infrastructure.profiling.spill import FilesystemNumericSpillStore
 from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.module_registry import build_module_registry
 from infrastructure.sandbox.executor import SandboxExecutor
@@ -59,9 +55,6 @@ plan_validator = PlanValidator(
 sandbox = SandboxExecutor(SandboxLimits(), workspace=workspace)
 step_runner = RegistryStepRunner(module_registry, sandbox)
 execute_plan = ExecutePlanUseCase(step_runner, plan_validator)
-profile_writer = FilesystemProfileWriter(workspace / "artifacts")
-numeric_spill = FilesystemNumericSpillStore(workspace / "artifacts")
-profile_source = ProfileSourceUseCase(PandasChunkProfiler(numeric_spill), profile_writer)
 clock = SystemClock()
 run_checkpoint = InMemoryRunCheckpoint()
 approval_gateway = InMemoryApprovalGateway(clock)
@@ -107,9 +100,6 @@ app.state.module_registry = module_registry
 app.state.database = database
 app.state.plan_validator = plan_validator
 app.state.execute_plan = execute_plan
-app.state.profile_writer = profile_writer
-app.state.numeric_spill = numeric_spill
-app.state.profile_source = profile_source
 app.state.run_checkpoint = run_checkpoint
 app.state.approval_gateway = approval_gateway
 app.state.cleanup = cleanup

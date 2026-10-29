@@ -1,10 +1,12 @@
-# Agent ETL Builder - Backlog
+# Agent ETL Builder - Backlog (v1)
 
-Version: 1.4
-Status: PRF-1 complete; ASM-1 next; TRN-0 in progress
+Version: 1.5
+Scope: v1 delivery only
+Status: PRF-1 simplified complete; ASM-1 next; TRN-0 in progress
 Last updated: 2026-10-29
 
-Priority: P0 blocks v1, P1 is required for v1, P2 is later.
+Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
+`documents/backlog_v2.txt`.
 
 | ID | P | Item | Depends on | Acceptance criteria | Status |
 |---|---|---|---|---|---|
@@ -17,18 +19,14 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 | EXE-1 | P0 | Interpreter and sandbox | PLN-1, ST-1 | Only validated steps run; no generated code; timeout, memory, filesystem, and network limits are tested. | Done |
 | WF-1 | P0 | Bounded agent workflow | PLN-1, EXE-1 | Clarification, approval, execution, retry, cancel, and cleanup paths reach a terminal state. | Done |
 | ING-1 | P1 | Ingestion adapters | FND-1, DB-1 | CSV, JSON/JSONL, Parquet, and PostgreSQL reads are read-only, chunked, and produce stable IDs. | Done |
-| PRF-1 | P1 | Profiling and chunk merge | ING-1 | Quality/info metrics use explicit formulas; per-chunk records merge correctly; accuracy is `N/A`. | Done |
-| ASM-1 | P1 | Source-only assessment and draft plan | ING-1, PRF-1, PLN-1, EXE-1 | Source-only intent is detected; read-only assessment runs; draft plan lists issues, assumptions, and missing inputs; no writes; confirmation builds an executable plan. | Pending |
-| RPT-1 | P1 | Deterministic source report | PRF-1, ASM-1 | Offline, escaped HTML summary uses only validated quality/info values; no external CDN; optional narrative cites only validated values. | Pending |
+| PRF-1 | P1 | Core profiling and chunk merge | ING-1 | Completeness, uniqueness, numeric/date/categorical statistics, and quality/info artifacts use explicit formulas; per-chunk records merge; accuracy is `N/A`. Advanced rules, sampling, spill, and reports are v2. | Done |
+| ASM-1 | P1 | Source-only assessment and draft plan | ING-1, PRF-1, PLN-1, EXE-1 | Source-only intent is detected; read-only full-source assessment runs; draft plan lists issues, assumptions, and missing inputs; no writes; confirmation builds an executable plan. | Pending |
 | TRN-0 | P1 | Reusable transformation modules | FND-1 | Separate, deterministic, idempotent modules are added in batches of five; inputs are not mutated; failures use structured errors. | In progress |
 | TRN-1 | P1 | Transformation DSL | TRN-0, PLN-1 | Cleansing, casting, standardization, filtering, and imputation are deterministic and idempotent. | Pending |
 | LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and PostgreSQL insert/upsert/truncate modes are transactional and safe. | Pending |
 | MON-1 | P1 | Monitoring and errors | FND-1 | Transform CSV, execution JSONL, error taxonomy, redaction, and fallback logging work. | Pending |
 | API-1 | P1 | FastAPI interface | WF-1 | Run create/status/approve/cancel/logs/health endpoints meet the API contract. | Done |
 | TST-1 | P1 | Test and evaluation suite | REG-1, PLN-1, EXE-1, ASM-1 | Unit, integration, edge-case, security, regression, and golden-plan tests pass; core coverage is at least 80%. | Pending |
-| EXP-1 | P2 | Python export | PLN-1, TST-1 | Fixed templates produce an export artifact that is never executed. | Pending |
-| ADP-1 | P2 | Future database adapters | LOD-1 | MySQL, Oracle, or MongoDB adapters pass the shared adapter contract tests. | Pending |
-| OBS-1 | P2 | Dashboards and alerts | MON-1 | Metrics and traces are visible; alert rules are documented and tested. | Pending |
 
 ## Risks
 
@@ -63,31 +61,24 @@ Priority: P0 blocks v1, P1 is required for v1, P2 is later.
 - JSON array readers materialize the document before chunking; use JSONL for large
   line-delimited sources. Parquet reads target one file, not partitioned datasets.
 - Chunk manifests cover size, order, partial final chunks, total rows, hashes, and merge
-  method. Profiling writes per-chunk records and validates sequence, schema, and rule state
-  during merge; automatic resume or reload of partial/corrupt chunk records is future
-  hardening.
+  method. Profiling writes per-chunk records and validates sequence and schema during merge;
+  resume or reload of partial/corrupt records is v2.
 - PostgreSQL table reads are available through `PostgresSourceReader`; registry plans cannot
   select it yet because registry execution runs under a sandbox that denies network access.
   Add a configured-connection sandbox policy before binding database readers as plan modules.
 - `pandas` is pinned to `3.0.6`; the local Windows code-integrity policy blocks pandas
   `3.1.0`'s unsigned `strptime` extension.
 - `pyarrow` is required for Parquet reads.
-- Profiling caps exact distinct-value maps, row/key fingerprints, frequency output, and
-  numeric mode maps; capped metrics are marked approximate. The composition root spills finite
-  numeric values to sorted temporary Parquet files and merges them as a sorted stream. A
-  standalone profiler without a spill store keeps values in memory, so production callers
-  should wire the configured store.
-- Sampling may miss rare issues; PRF-1 records scope/method/approximate, but the ASM-1 caller
-  must choose and label bounded samples.
-- Date statistics cover datetime-typed columns. Mixed-format date strings require an explicit
-  type rule or a prior cast; naive and timezone-aware chunks are not merged silently.
-- The deterministic HTML summary and optional LLM narrative are tracked by RPT-1; PRF-1 emits
-  the validated quality/info/chunk artifacts they will consume.
-- Draft plans can remain incomplete until the destination is supplied.
+- v1 profiling is full-source and retains exact numeric values and bounded maps in memory.
+  Sampling, Parquet spill/external sort, declared quality rules, and per-column failure
+  isolation are v2 work.
+- Date statistics cover datetime-typed columns. Mixed-format date strings require a prior
+  cast; naive and timezone-aware chunks are not merged silently.
 - Accuracy remains blocked until a formula and reference rules are provided.
 - Prompt injection and unsafe model output require continuous adversarial tests.
 
 ## Review gate
 
 Architecture, security, and backlog were reviewed before implementation. Re-review them
-before changing scope, security controls, or persistence guarantees.
+before changing scope, security controls, or persistence guarantees. v2 candidates and
+deferred edge cases are in `documents/backlog_v2.txt`.

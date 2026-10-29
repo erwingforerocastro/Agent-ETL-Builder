@@ -2,15 +2,12 @@ from importlib.metadata import version
 
 import main
 from application.use_cases.execute_plan import ExecutePlanUseCase
-from application.use_cases.profile_source import ProfileSourceUseCase
 from application.use_cases.run_manager import RunManager
 from application.validation.plan_validator import PlanValidator
 from infrastructure.approval.in_memory import InMemoryApprovalGateway
 from infrastructure.cleanup.filesystem import FilesystemCleanup
 from infrastructure.database.postgres import PostgresDatabase
 from infrastructure.logging.run_log import InMemoryRunLog
-from infrastructure.profiling.artifacts import FilesystemProfileWriter
-from infrastructure.profiling.spill import FilesystemNumericSpillStore
 from infrastructure.scheduling.thread_pool import ThreadPoolRunScheduler
 from infrastructure.state.run_checkpoint import InMemoryRunCheckpoint
 from infrastructure.validation.plan_hasher import CanonicalPlanHasher
@@ -31,15 +28,6 @@ def test_composition_root_wires_plan_validation_and_execution() -> None:
     assert isinstance(main.execute_plan, ExecutePlanUseCase)
     assert main.app.state.plan_validator is main.plan_validator
     assert main.app.state.execute_plan is main.execute_plan
-
-
-def test_composition_root_wires_profiling() -> None:
-    assert isinstance(main.profile_source, ProfileSourceUseCase)
-    assert isinstance(main.profile_writer, FilesystemProfileWriter)
-    assert isinstance(main.numeric_spill, FilesystemNumericSpillStore)
-    assert main.app.state.profile_source is main.profile_source
-    assert main.app.state.profile_writer is main.profile_writer
-    assert main.app.state.numeric_spill is main.numeric_spill
 
 
 def test_composition_root_wires_workflow_adapters() -> None:

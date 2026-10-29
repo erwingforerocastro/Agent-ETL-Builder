@@ -1,7 +1,7 @@
 # Agent ETL Builder - Architecture
 
-Version: 1.5
-Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, and API-1 implemented; TRN-0 in progress
+Version: 1.6
+Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, and API-1 implemented; TRN-0 in progress
 Last updated: 2026-10-29
 Scope: Module organization and runtime boundaries.
 
@@ -13,7 +13,7 @@ LangGraph, FastAPI, pandas, PostgreSQL drivers, or other infrastructure.
 | Layer | Responsibility |
 |---|---|
 | domain/entities | Plans, registry entries, runs, artifacts, approvals, errors |
-| application/use_cases | Assess sources, build/validate/execute plans, run the bounded workflow, profile, merge, load, report, cancel |
+| application/use_cases | Assess sources, build/validate/execute plans, run the bounded workflow, profile, merge, load, cancel |
 | application/validation | Plan validation policy: schema, registry, arguments, paths, limits, security, approval |
 | application/registry | Allowlist specs, versions, constraints, examples, and side-effect policy |
 | infrastructure/adapters | PostgreSQL sessions, files, LLM providers, local-memory run checkpoint, sandbox, logs |
@@ -32,7 +32,8 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - Plan builder/validator: schema, allowlist, arguments, paths, limits, security, approval.
   Policy checks live in `application/validation`; Pydantic parsing, plan size measurement,
   and filesystem probing are infrastructure adapters.
-- Source assessor: read-only source validation, sampling, profiling, and draft-plan inputs.
+- Source assessor: read-only source validation, full-source profiling, and draft-plan inputs.
+  Bounded sampling is deferred to the v2 backlog.
 - Interpreter: an application use case validates the plan, then orchestrates steps through
   a step-runner port; pandas and sandbox mechanics live in infrastructure.
 - Sandbox: one serialized in-process execution guard. It confines file content access to
@@ -55,14 +56,13 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   use bytes, frame content/schema hashes support reproducibility, and `ChunkManifest`
   describes ordered chunks, partial final chunks, totals, and the merge method. Artifact names
   are sanitized and length-limited.
-- Profiling and chunk merger: `ProfileSourceUseCase` profiles ordered chunks, writes one
-  mergeable record per chunk, then merges counts, exact values/frequencies, and row/key
+- Core profiling and chunk merger: `ProfileSourceUseCase` profiles ordered full-source chunks,
+  writes one mergeable record per chunk, then merges counts, exact values/frequencies, and row
   fingerprints. `PandasChunkProfiler` owns pandas mechanics; domain types enforce metric,
-  warning, and chunk-state invariants. Finite numeric values are spilled as sorted temporary
-  Parquet files by the composition root and merged as a sorted stream; a standalone profiler
-  retains them in memory. Quality CSV, info JSON, and chunk JSON writers are filesystem
-  adapters. Completeness, uniqueness, declared-rule consistency/validity, and statistics are
-  explicit; accuracy is always `N/A`. Capped maps are marked approximate.
+  warning, and chunk-state invariants. Quality CSV, info JSON, and chunk JSON writers are
+  filesystem adapters. Completeness, uniqueness, numeric/date/categorical statistics are
+  explicit; consistency/validity rules, sampling, spill, and reports are v2 work. Accuracy is
+  always `N/A`. Capped maps are marked approximate.
 - Transformation DSL: cleansing, casting, standardization, filtering, and imputation.
 - Loaders: atomic file writes and transactional PostgreSQL insert/upsert.
 - Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
@@ -72,12 +72,10 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - Agent workflow: a plain application state machine, one instance per run. It bounds plan
   intake/clarification, validation, approval, execution, retry, cancellation, and cleanup.
   External effects are ports; run snapshots are saved after every transition.
-- Reports: planned escaped offline HTML summary from validated quality/info metrics; optional
-  narrative may cite only validated values. Not wired yet.
 - Profiling artifacts: per-chunk records, `quality.csv`, and `info.json` are written below
   `artifacts/<run_id>/`. The source is never mutated. Metrics carry stable formulas and
   definition versions; `accuracy` is `N/A` until a formula/reference rules are supplied.
-  Sampling is caller-supplied, and sample scopes must be marked approximate.
+  Reports and sampling are deferred to the v2 backlog.
 - API: FastAPI routes for run creation/status, approval, cancellation, lifecycle logs, and
   health. A `RunManager` owns per-run workflow instances (each with its cancellation token),
   schedules execution on a background thread pool, and keeps process-local outcomes and logs.
@@ -120,7 +118,7 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 
 1. Detect a source-only request.
 2. Validate source access and schema.
-3. Run a read-only assessment using a full scan or bounded sample.
+3. Run a read-only full-source assessment. Bounded sampling is a v2 candidate.
 4. Derive issues, candidate transformations, assumptions, and missing inputs.
 5. Present a draft plan; after confirmation, build and validate the executable plan.
 
@@ -130,14 +128,14 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - `src/application/` use cases, ports, validation policy, and registry policy.
 - `src/infrastructure/` PostgreSQL, file, LLM, local-memory run checkpoint, approval gateway,
   cleanup, clock, database sessions, ingestion readers and identifiers, profiling/artifact
-  writers and numeric spill, deterministic/submitted plan intake, Pydantic schema and plan
-  parser, filesystem probe, plan sizer/hasher, registry bindings, sandbox, background
-  scheduler, run log, and logging adapters.
+  writers, deterministic/submitted plan intake, Pydantic schema and plan parser, filesystem
+  probe, plan sizer/hasher, registry bindings, sandbox, background scheduler, run log, and
+  logging adapters.
 - `src/interfaces/` FastAPI routes and schemas.
 - `src/main.py` composition root.
 - `tests/` unit, integration, edge-case, and security tests.
 - `documents/` specifications and decisions.
-- `artifacts/<run_id>/` run outputs, transform log, profiles, and reports.
+- `artifacts/<run_id>/` run outputs, transform logs, and core profiles. Reports are v2.
 - `logs/<run_id>.jsonl` execution log.
 - Root `README.md` and `pyproject.toml` before code starts.
 
@@ -146,10 +144,10 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - `interfaces/` receives requests and calls `application/` use cases.
 - `application/` assesses sources, profiles and merges chunk records, builds and validates
   plans, then calls `infrastructure/` adapters through ports.
-- `infrastructure/` reads/writes PostgreSQL and files, profiles pandas chunks, spills numeric
-  values to temporary Parquet, writes quality and info artifacts, calls LLMs, checkpoints
-  state, parses JSON plans, measures serialized plan size, probes the workspace, and runs
-  sandboxed steps with workspace, network, time, and memory guards.
+- `infrastructure/` reads/writes PostgreSQL and files, profiles pandas chunks, writes quality
+  and info artifacts, calls LLMs, checkpoints state, parses JSON plans, measures serialized
+  plan size, probes the workspace, and runs sandboxed steps with workspace, network, time, and
+  memory guards.
 - `domain/` holds shared entities and validates core invariants.
 - Plan validation and registry allowlists are application policy; Pydantic schemas,
   filesystem inspection, and concrete callables are infrastructure adapters.

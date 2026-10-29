@@ -16,7 +16,6 @@ from infrastructure.ingestion.identifiers import (
 )
 from infrastructure.profiling.artifacts import FilesystemProfileWriter
 from infrastructure.profiling.pandas_profiler import PandasChunkProfiler
-from infrastructure.profiling.spill import FilesystemNumericSpillStore
 
 
 def test_csv_source_is_profiled_with_stable_identity_and_artifacts(tmp_path: Path) -> None:
@@ -36,8 +35,7 @@ def test_csv_source_is_profiled_with_stable_identity_and_artifacts(tmp_path: Pat
     )
     artifacts_root = tmp_path / "artifacts"
     writer = FilesystemProfileWriter(artifacts_root)
-    spill = FilesystemNumericSpillStore(artifacts_root)
-    use_case = ProfileSourceUseCase(PandasChunkProfiler(spill), writer)
+    use_case = ProfileSourceUseCase(PandasChunkProfiler(), writer)
 
     outcome = use_case.execute(
         iter_csv_chunks(path=str(path), chunk_size=1),
@@ -54,7 +52,6 @@ def test_csv_source_is_profiled_with_stable_identity_and_artifacts(tmp_path: Pat
     assert Path(outcome.artifacts.info_path).exists()
     assert len(outcome.artifacts.chunk_paths) == 3
     assert all(Path(item).exists() for item in outcome.artifacts.chunk_paths)
-    assert list((artifacts_root / "run-1").glob("*.parquet"))
 
     duplicates = next(
         metric for metric in outcome.report.metrics if metric.metric == "duplicate_rows"

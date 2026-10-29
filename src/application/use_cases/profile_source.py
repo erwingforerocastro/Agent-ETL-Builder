@@ -26,11 +26,7 @@ class ProfileSourceUseCase:
     ) -> ProfileOutcome:
         records = []
         for index, chunk in enumerate(chunks):
-            record = self._profiler.profile_chunk(
-                chunk,
-                chunk_index=index,
-                request=request,
-            )
+            record = self._profiler.profile_chunk(chunk, chunk_index=index)
             self._writer.write_chunk(request, record)
             records.append(record)
 

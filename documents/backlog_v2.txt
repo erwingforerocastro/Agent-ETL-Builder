@@ -1,0 +1,61 @@
+# Agent ETL Builder - Backlog (v2 candidates)
+
+Version: 2.0-draft
+Status: Deferred work; not part of v1 acceptance
+Last updated: 2026-10-29
+
+This file records work intentionally removed from the v1 path to keep the first release small.
+It is not a commitment to implement every item; promote items only when a real user flow needs
+them.
+
+## Candidate items
+
+| ID | P | Item | Why deferred | Depends on |
+|---|---|---|---|---|
+| RPT-1 | P1 | Deterministic source report | v1 profiling stops at validated quality/info artifacts and chunk records. | PRF-1, ASM-1 |
+| RPT-2 | P2 | Optional LLM narrative | Narrative is optional and must only cite validated metrics; it is not needed for the v1 assessment loop. | RPT-1 |
+| PRF-2 | P1 | Declared quality rules | v1 reports consistency/validity as `N/A`; a rule DSL is only useful once ASM-1 has a rule source. | PRF-1, ASM-1 |
+| PRF-3 | P1 | Sampling and assessment scope | v1 profiles full sources; bounded samples, scope labels, confidence, and drift detection need an assessment caller. | PRF-1, ASM-1 |
+| PRF-4 | P1 | Exact large numeric scans | v1 keeps finite numeric values in memory. Add sorted Parquet spill and external/streaming merge when full scans exceed memory. | PRF-1 |
+| PRF-5 | P2 | Per-column failure isolation | v1 fails the profile with a structured error. Placeholder state and partial metrics can be added if partial results become valuable. | PRF-1 |
+| PRF-6 | P2 | Mixed-type and deep schema drift | v1 handles compatible numeric/all-null drift and rejects incompatible kinds. Deeper mixed types and coercion policy are deferred. | PRF-1 |
+| PRF-7 | P2 | ISO 8601 duration and richer date output | v1 exposes date min/max/range seconds only. | PRF-1 |
+| PRF-8 | P2 | Corrupt chunk record recovery | v1 validates in-memory chunk order and schema. Reloading, repairing, or resuming from persisted records is not implemented. | PRF-1 |
+| ASM-2 | P1 | Assessment cache by content/schema hash | v1 keeps assessment simple; caching and invalidation are optimization work. | ASM-1, PRF-3 |
+| ST-2 | P1 | Persistent checkpoints and crash resume | v1 uses process-local memory only. | ST-1 |
+| DB-2 | P1 | Configured-connection sandbox policy | PostgreSQL reads exist but cannot be selected by validated plans because registry execution denies network access. | DB-1, EXE-1 |
+| API-2 | P2 | Retention, rate limiting, stronger auth | v1 exposes optional API-key protection and process-local logs. | API-1 |
+| EXP-1 | P2 | Python export | Fixed-template export is an artifact only and is not on the v1 execution path. | PLN-1, TST-1 |
+| ADP-1 | P2 | Future database adapters | v1 is PostgreSQL-only; MySQL, Oracle, and MongoDB remain future adapters. | LOD-1 |
+| OBS-1 | P2 | Dashboards and alerts | Metrics and traces are deployment concerns after MON-1. | MON-1 |
+
+## Deferred profiling edge cases
+
+These were intentionally moved out of the v1 profiler:
+
+- Exact median/mode for very large full scans requiring spill/external sort.
+- Bounded sampling, sample confidence, and approximate scope labels.
+- Declared cross-column, duplicate-key, type, range, regex, domain, and unique-key rules.
+- Per-column metric failure isolation and partial reports.
+- Mixed numeric/string columns, mixed date formats, and naive/aware datetime unification.
+- ISO 8601 duration output for date ranges.
+- High-cardinality numeric mode display limits.
+- Reloading or repairing per-chunk records; duplicate, missing, or corrupt record recovery.
+- Assessment cache invalidation after source or schema changes.
+- Numeric/date statistics for string columns that look like dates or numbers.
+
+## Deferred operational edge cases
+
+- Persistent checkpoints, active-run recovery, and crash resume.
+- RunManager retention and eviction for long-running deployments.
+- PostgreSQL connection pooling, exhausted pools, and read-only role grants.
+- Configured database connections inside the registry sandbox.
+- Rate limiting, stronger API authentication, and production secret management.
+- Execution/transform JSONL logging, report HTML escaping, CSP, and external-CDN policy.
+- Future non-PostgreSQL adapters and dashboards.
+
+## Promotion rule
+
+Before promoting an item, confirm it is needed by the current v1 user flow, define the smallest
+acceptance test, and keep advanced policy or optional parameters out of the core path until the
+flow exists.

@@ -17,7 +17,6 @@ class ChunkProfilerPort(Protocol):
         chunk: object,
         *,
         chunk_index: int,
-        request: ProfileRequest,
     ) -> ChunkProfile: ...
 
     def merge(
