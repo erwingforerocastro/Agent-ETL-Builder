@@ -2,7 +2,7 @@
 
 Version: 1.1
 Last verified: 2026-10-29
-Verified code commit: `94572b7` plus the TRN-0 batch (local `main`)
+Verified code commit: `f0530a1` (TRN-0 batch two; local `main`)
 Verified baseline: 578 passed, 3 skipped, 90.42% coverage; ruff, format, mypy, lock, and sync clean.
 
 Purpose: explain how the project actually works today, not how it is planned to work.
@@ -333,7 +333,7 @@ uv lock --check
 uv sync --check
 ```
 
-Last result on 2026-10-29 at commit `94572b7` plus the TRN-0 batch:
+Last result on 2026-10-29 at commit `f0530a1`:
 
 - `pytest`: 578 passed, 3 skipped, 13.94 s, coverage 90.42% (required 80%).
 - `ruff check`: clean.
