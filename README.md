@@ -3,11 +3,11 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, and API-1 complete. Five
-transformations are registered in the versioned allowlist, structured plans are validated
+**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, and API-1 complete.
+Five transformations are registered in the versioned allowlist, structured plans are validated
 before execution, and the bounded run workflow handles intake, approval, execution, retries,
 cancellation, and cleanup. The FastAPI run contract exposes the workflow with background
-execution. PostgreSQL connectivity is available through a psycopg-backed adapter. The sandbox
+execution. PostgreSQL connectivity and read-only ingestion adapters are available. The sandbox
 is an in-process guard; OS-level isolation remains deferred. Additional transformation batches
 remain in progress.
 
@@ -33,6 +33,7 @@ main (composition root) -> interfaces + infrastructure
 
 - Python 3.12+
 - `uv` for environment and dependency management
+- `pyarrow` is installed for Parquet support; `psycopg` for PostgreSQL.
 
 ## Setup
 
@@ -132,6 +133,42 @@ Integration tests start a temporary PostgreSQL cluster and skip when server bina
 available. Set `AGENT_ETL_TEST_PG_BIN` to a PostgreSQL `bin` directory to select a specific
 installation. TLS tests generate a short-lived self-signed certificate with OpenSSL; set
 `AGENT_ETL_TEST_OPENSSL` when OpenSSL is not on `PATH`.
+
+## Ingestion
+
+Read-only readers are registered in the allowlist for plan execution:
+
+| Function | Format | Chunked implementation |
+|---|---|---|
+| `read_csv` | CSV | pandas `chunksize` |
+| `read_json` | JSON array | full document parse, then deterministic chunks |
+| `read_jsonl` | JSON Lines | pandas `lines=True` with `chunksize` |
+| `read_parquet` | Parquet | pyarrow row batches |
+
+`read_*` returns a DataFrame for a plan source step. The streaming variants
+`iter_csv_chunks`, `iter_json_chunks`, `iter_jsonl_chunks`, and `iter_parquet_chunks` accept a
+`chunk_size` and preserve row order. JSON arrays must be parsed before chunking, so use JSONL
+for large line-delimited files.
+
+Stable identifiers and reproducibility metadata live in
+`src/infrastructure/ingestion/identifiers.py` and `src/domain/entities/ingestion.py`:
+
+- `source_id_for(source_type, canonical_uri)` returns `src_<hash>` and strips URI credentials.
+- `canonical_file_uri`, `file_content_hash`, `frame_content_hash`, and `frame_schema_hash`
+  provide stable source, content, and schema hashes.
+- `SourceIdentity` carries `source_id`, `source_type`, content/schema hashes, and row count.
+- `ChunkManifest.from_identity(...)` plus `chunk_specs` describe ordered chunks, partial final
+  chunks, total rows, and merge method.
+- `iter_frame_chunks` yields independent in-memory chunks; `artifact_id` builds sanitized
+  run/source/artifact/chunk names.
+
+PostgreSQL reads use `PostgresSourceReader` with `DatabasePort`. It opens read-only
+transactions, validates and quotes table/column identifiers, and uses server-side cursors for
+`iter_chunks`. `read_source` returns the DataFrame together with its `SourceIdentity`. The
+reader accepts the configured database port; wiring it into source assessment is part of
+ASM-1. Making it a registry plan module requires the sandbox network policy to allow
+configured database connections, which is not implemented yet. Raw SQL, `WHERE` clauses, and
+filter expressions are also not accepted yet.
 
 ## Implemented transformations
 
@@ -326,9 +363,10 @@ documents/
 
 ## Roadmap
 
-`EXE-1`, `WF-1`, `DB-1`, and `API-1` are complete: plans are validated before execution, the
-sandbox enforces workspace, network, timeout, and memory limits, the workflow bounds
-clarification, approval, retries, cancellation, and cleanup, PostgreSQL sessions are
-parameterized and transaction-scoped, and the FastAPI run contract executes runs in the
-background. The next P1 backlog item is `ING-1` (ingestion adapters). Additional `TRN-0`
-transformation batches remain in progress.
+`EXE-1`, `WF-1`, `DB-1`, `ING-1`, and `API-1` are complete: plans are validated before
+execution, the sandbox enforces workspace, network, timeout, and memory limits, the workflow
+bounds clarification, approval, retries, cancellation, and cleanup, PostgreSQL sessions are
+parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL reads are chunked with
+stable identifiers, and the FastAPI run contract executes runs in the background. The next P1
+backlog item is `PRF-1` (profiling and chunk merge). Additional `TRN-0` transformation batches
+remain in progress.

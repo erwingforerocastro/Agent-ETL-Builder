@@ -16,9 +16,11 @@ _DSN = "postgresql://user:secret@localhost:5432/warehouse"
 
 
 class _FakeCursor:
-    def __init__(self, connection: _FakeConnection) -> None:
+    def __init__(self, connection: _FakeConnection, name: str | None = None) -> None:
         self._connection = connection
+        self.name = name
         self._rows: list[tuple[object, ...]] = []
+        self._position = 0
         self.rowcount = -1
         self.description: tuple[SimpleNamespace, ...] | None = None
 
@@ -32,6 +34,7 @@ class _FakeCursor:
         self._connection.record(sql, tuple(params))
         self._connection.raise_for(sql)
         self._rows = list(self._connection.rows)
+        self._position = 0
         self.rowcount = self._connection.rowcount
         self.description = (
             tuple(SimpleNamespace(name=name) for name in self._connection.columns) or None
@@ -50,7 +53,9 @@ class _FakeCursor:
         return list(self._rows)
 
     def fetchmany(self, size: int) -> list[tuple[object, ...]]:
-        return list(self._rows[:size])
+        rows = self._rows[self._position : self._position + size]
+        self._position += len(rows)
+        return rows
 
 
 class _FakeConnection:
@@ -69,6 +74,7 @@ class _FakeConnection:
         self.error = error
         self.error_on_sql = error_on_sql
         self.statements: list[tuple[str, object]] = []
+        self.cursor_names: list[str | None] = []
         self.committed = False
         self.rolled_back = False
         self.closed = False
@@ -84,8 +90,9 @@ class _FakeConnection:
         self.closed = True
         return False
 
-    def cursor(self) -> _FakeCursor:
-        return _FakeCursor(self)
+    def cursor(self, name: str | None = None) -> _FakeCursor:
+        self.cursor_names.append(name)
+        return _FakeCursor(self, name)
 
     def record(self, sql: str, params: object) -> None:
         self.statements.append((sql, params))
@@ -220,6 +227,52 @@ def test_execute_and_execute_many_return_rowcounts() -> None:
         assert session.execute_many("INSERT INTO people VALUES (%s)", []) == 0
 
     assert len(connection.statements) == 3
+
+
+def test_iter_batches_uses_a_server_side_cursor_and_preserves_order() -> None:
+    connection = _FakeConnection(
+        rows=[(1, "Ada"), (2, "Bob"), (3, "Cyd")],
+        columns=("id", "name"),
+    )
+    database, _ = _database(connection)
+
+    with database.connect(read_only=True) as session:
+        batches = list(
+            session.iter_batches(
+                "SELECT id, name FROM people ORDER BY id",
+                batch_size=2,
+            )
+        )
+
+    assert [batch.rows for batch in batches] == [
+        ((1, "Ada"), (2, "Bob")),
+        ((3, "Cyd"),),
+    ]
+    assert all(batch.columns == ("id", "name") for batch in batches)
+    assert connection.cursor_names[1] is not None
+    assert connection.cursor_names[1].startswith("agent_etl_")
+
+
+def test_iter_batches_rejects_invalid_batch_size() -> None:
+    connection = _FakeConnection()
+    database, _ = _database(connection)
+
+    with pytest.raises(ValueError, match="batch_size"), database.connect(read_only=True) as session:
+        list(session.iter_batches("SELECT 1", batch_size=0))
+
+
+def test_iter_batches_wraps_database_errors() -> None:
+    connection = _FakeConnection(
+        error=psycopg.OperationalError("server closed: secret"),
+        error_on_sql="FROM people",
+    )
+    database, _ = _database(connection)
+
+    with pytest.raises(IngestionError) as captured, database.connect(read_only=True) as session:
+        list(session.iter_batches("SELECT * FROM people", batch_size=2))
+
+    assert captured.value.code == "DATABASE_READ_FAILED"
+    assert "secret" not in str(captured.value)
 
 
 def test_fetch_all_rejects_negative_max_rows() -> None:

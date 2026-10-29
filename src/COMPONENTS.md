@@ -156,7 +156,7 @@ last column.
 | `RunLogPort` | Append and read structured run events. | `InMemoryRunLog` |
 | `BackgroundSchedulerPort` | Submit run work outside the request thread. | `ThreadPoolRunScheduler` |
 | `DatabasePort` | Open a transaction-scoped read-only or writable session. | `PostgresDatabase` |
-| `DatabaseSessionPort` | Parameterized fetch/execute/execute-many operations. | `PostgresSession` |
+| `DatabaseSessionPort` | Parameterized fetch/execute/execute-many plus server-side batch iteration. | `PostgresSession` |
 
 ## 5. Plan validation (`src/application/validation/`)
 
@@ -394,7 +394,12 @@ cleanup. Those are deployment-level hardening items.
 | `validation/plan_sizer.py` | `CanonicalPlanSizer` (serialized size). |
 | `validation/plan_validator.py` | JSON-facing validation facade over the application validator. |
 | `transformations/` | Deterministic pandas transformations registered in the allowlist. |
-| `ingestion/csv.py` | CSV source adapter. |
+| `ingestion/csv.py` | CSV full and chunked readers. |
+| `ingestion/json.py` | JSON-array and JSONL full/chunked readers. |
+| `ingestion/parquet.py` | Parquet full and pyarrow-batch readers through sandbox-guarded file handles. |
+| `ingestion/postgresql.py` | `PostgresSourceReader`: read-only, identifier-validated table reads and server-side batches. |
+| `ingestion/identifiers.py` | Stable source ids, content/schema hashes, canonical paths, and artifact names. |
+| `ingestion/chunking.py` | Deterministic in-memory chunk iteration. |
 | `loaders/csv.py` | CSV destination adapter. |
 
 ### PostgreSQL sessions (`infrastructure/database/`)
@@ -411,6 +416,7 @@ DatabaseSessionPort
   +-> fetch_all(sql, params, max_rows?) -> QueryResult(columns, rows, truncated)
   +-> execute(sql, params) -> rowcount
   +-> execute_many(sql, rows) -> rowcount
+  +-> iter_batches(sql, params, batch_size) -> QueryResult per server-side batch
   |
   v
 success -> commit; any exception -> rollback
@@ -422,6 +428,34 @@ psycopg.Error -> IngestionError (read-only) or LoadError (writable)
 adapter does not connect at startup, so the API remains available without PostgreSQL. SQL
 text and identifiers remain the caller's responsibility; ingestion and loading modules must
 allowlist/quote identifiers and pass all values as parameters.
+
+### Ingestion (`infrastructure/ingestion/`)
+
+```text
+read_csv / read_json / read_jsonl / read_parquet
+  -> DataFrame for a registry source step
+iter_*_chunks
+  -> ordered DataFrame batches (CSV/JSONL stream; JSON arrays materialize first;
+     Parquet uses pyarrow batches through a guarded file handle)
+PostgresSourceReader
+  -> read / read_source -> DataFrame + SourceIdentity
+  -> iter_chunks -> server-side batches from a read-only session
+  -> validates table/column identifiers and quotes them; no raw SQL or WHERE support yet
+
+SourceIdentity
+  source_id <- sha256(source_type + credential-free canonical URI)
+  content_hash <- file bytes or frame values
+  schema_hash <- column order/names/dtypes
+  row_count
+ChunkManifest
+  run_id, source_id, source_type, chunk_size, total_rows,
+  ordered ChunkSpec entries, content/schema hashes, merge_method
+```
+
+`read_csv`, `read_json`, `read_jsonl`, and `read_parquet` are registered allowlist modules.
+`PostgresSourceReader` accepts the configured `DatabasePort`; it is not a registry module yet
+because registry execution runs under a sandbox that denies network access. JSON arrays are
+materialized before chunking; use JSONL for large line-delimited files.
 
 ## 10. Interfaces (`src/interfaces/api/`)
 
@@ -533,6 +567,10 @@ GET /runs/{id}/logs
 - **Add or replace a database adapter:** implement `DatabasePort`/`DatabaseSessionPort` (for
   example MySQL or Oracle) and wire it in `main.py`; ingestion and loading callers stay on the
   port. PostgreSQL configuration lives in `infrastructure/database/config.py`.
+- **Add an ingestion reader:** implement a read-only DataFrame function, add optional
+  `iter_*_chunks` streaming, register the callable in `infrastructure/registry/bindings.py`,
+  and add a `ModuleSpec` with the right path constraint and supported dialect. Compute stable
+  identity through `infrastructure/ingestion/identifiers.py`.
 - **Replace plan intake:** implement `PlanIntakePort` and `PlanIntakeFactoryPort`, then wire
   the factory into `RunManager`.
 - **Replace plan parsing:** implement `PlanParserPort` (for example a different schema

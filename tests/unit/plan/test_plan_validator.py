@@ -218,6 +218,26 @@ def test_valid_assessment_passes(tmp_path: Path) -> None:
     _validator(tmp_path).validate(plan)
 
 
+@pytest.mark.parametrize(
+    ("operation", "params"),
+    [
+        ("read_json", {"path": "input.json"}),
+        ("read_json", {"path": "input.json", "orient": "records"}),
+        ("read_jsonl", {"path": "input.jsonl"}),
+        ("read_parquet", {"path": "input.parquet"}),
+        ("read_parquet", {"path": "input.parquet", "columns": ["id"]}),
+    ],
+)
+def test_valid_ingestion_sources_pass(
+    tmp_path: Path,
+    operation: str,
+    params: dict[str, object],
+) -> None:
+    plan = make_plan(source=PlanSource(operation=operation, params=params))
+
+    _validator(tmp_path).validate(plan)
+
+
 def test_unknown_operation_is_rejected(tmp_path: Path) -> None:
     plan = make_plan(source=PlanSource(operation="unknown_operation", params={}))
 

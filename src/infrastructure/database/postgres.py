@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any, cast
+from uuid import uuid4
 
 import psycopg
 from psycopg import Connection
@@ -110,6 +111,30 @@ class PostgresSession:
             with self._connection.cursor() as cursor:
                 cursor.executemany(sql, rows)
                 return cursor.rowcount
+        except psycopg.Error as exc:
+            raise self._error(exc) from exc
+
+    def iter_batches(
+        self,
+        sql: str,
+        params: Sequence[object] = (),
+        *,
+        batch_size: int,
+    ) -> Iterator[QueryResult]:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        try:
+            with self._connection.cursor(name=f"agent_etl_{uuid4().hex}") as cursor:
+                cursor.execute(sql, params)
+                columns = tuple(column.name for column in cursor.description or ())
+                while True:
+                    rows = cursor.fetchmany(batch_size)
+                    if not rows:
+                        break
+                    yield QueryResult(
+                        columns=columns,
+                        rows=tuple(tuple(row) for row in rows),
+                    )
         except psycopg.Error as exc:
             raise self._error(exc) from exc
 

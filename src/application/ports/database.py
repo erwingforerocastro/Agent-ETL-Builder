@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol
@@ -36,6 +36,16 @@ class DatabaseSessionPort(Protocol):
 
     def execute_many(self, sql: str, rows: Sequence[Sequence[object]]) -> int:
         """Run one parameterized statement for each supplied row set."""
+        ...
+
+    def iter_batches(
+        self,
+        sql: str,
+        params: Sequence[object] = (),
+        *,
+        batch_size: int,
+    ) -> Iterator[QueryResult]:
+        """Iterate a query in server-side batches of at most ``batch_size`` rows."""
         ...
 
 

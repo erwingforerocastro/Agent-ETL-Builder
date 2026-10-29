@@ -43,6 +43,9 @@ def test_registry_is_versioned_and_contains_the_approved_modules() -> None:
         "standardize_column_names",
         "cast_column",
         "read_csv",
+        "read_json",
+        "read_jsonl",
+        "read_parquet",
         "save_csv",
     ]
     assert {module.version for module in snapshot.modules} == {"1.0.0"}
@@ -74,7 +77,7 @@ def test_registry_metadata_matches_callable_signatures() -> None:
             "save_csv",
         ]:
             assert [item.name for item in module.inputs if item.pipeline_input] == ["df"]
-        elif module.name in ["read_csv"]:
+        elif module.name in ["read_csv", "read_json", "read_jsonl", "read_parquet"]:
             pass
 
         for item in module.inputs:
