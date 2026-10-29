@@ -1,9 +1,9 @@
 # Agent ETL Builder - Research / Ground Truth
 
-Version: 1.0
+Version: 1.1
 Last verified: 2026-10-29
-Verified code commit: `6cdb95e` (local `main`; documentation changes do not alter runtime behavior)
-Verified baseline: 515 passed, 3 skipped, 89.76% coverage; ruff, format, mypy, lock, and sync clean.
+Verified code commit: `94572b7` plus the TRN-0 batch (local `main`)
+Verified baseline: 578 passed, 3 skipped, 90.42% coverage; ruff, format, mypy, lock, and sync clean.
 
 Purpose: explain how the project actually works today, not how it is planned to work.
 Code and passing tests are authoritative. Planning documents may describe intended behavior.
@@ -35,8 +35,8 @@ source only     -> assess  -> confirm destination -> validate -> approval? -> ex
 
 Delivery status from `documents/backlog.txt`:
 
-- Done: DOC-1, FND-1, ST-1, DB-1, REG-1, PLN-1, EXE-1, WF-1, ING-1, PRF-1, ASM-1, API-1.
-- In progress: TRN-0.
+- Done: DOC-1, FND-1, ST-1, DB-1, REG-1, PLN-1, EXE-1, WF-1, ING-1, PRF-1, ASM-1,
+  API-1, TRN-0.
 - Pending: TRN-1, LOD-1, MON-1, TST-1.
 
 ## 2. Runtime in one picture
@@ -158,6 +158,11 @@ Registry version: `1.0.0`. Only these operations can appear in a plan:
 | Transform | `trim_whitespace` | Chunkable; leading/trailing/both. |
 | Transform | `standardize_column_names` | Chunkable; lower/upper/preserve, collision-safe. |
 | Transform | `cast_column` | Chunkable; string/integer/float, raise/coerce. |
+| Transform | `filter_rows` | Chunkable; one literal predicate per step; destructive. |
+| Transform | `fill_missing_values` | Not chunkable; constant, mean, median, or mode; nulls only. |
+| Transform | `normalize_dates` | Chunkable; parse with mixed formats and format with strftime; coerce is destructive. |
+| Transform | `change_text_case` | Chunkable; lower/upper/title on selected or all text columns. |
+| Transform | `replace_values` | Chunkable; exact text replacement; `new=null` is destructive. |
 | Write | `save_csv` | Writes a CSV file; currently not atomic. |
 
 Startup rejects duplicate module names, a spec with no bound callable, and a bound callable with
@@ -284,9 +289,12 @@ Planning and API:
 
 Execution and data:
 
-- Only five transformation modules exist. There is no transformation DSL, filtering, or
-  imputation yet.
+- Ten transformation modules exist. The plan step list is the only transformation DSL; there
+  are no multi-condition/OR filters, regex replacements, multi-column imputation steps,
+  explicit date input formats, or mixed-timezone normalization yet.
 - `save_csv` is the only destination and is not atomic.
+- `filter_rows`, `normalize_dates` with `errors="coerce"`, and `replace_values` with
+  `new=null` are classified as destructive and require approval; assessment plans reject them.
 - PostgreSQL read code exists, but no database module is in the registry allowlist. Registry
   execution also denies network access, so validated plans cannot read PostgreSQL yet (DB-2).
 - Assessment covers workspace files only; no database assessment.
@@ -325,12 +333,12 @@ uv lock --check
 uv sync --check
 ```
 
-Last result on 2026-10-29 at commit `6cdb95e`:
+Last result on 2026-10-29 at commit `94572b7` plus the TRN-0 batch:
 
-- `pytest`: 515 passed, 3 skipped, 14.19 s, coverage 89.76% (required 80%).
+- `pytest`: 578 passed, 3 skipped, 13.94 s, coverage 90.42% (required 80%).
 - `ruff check`: clean.
-- `ruff format --check`: 198 files already formatted.
-- `mypy`: no issues in 197 source files.
+- `ruff format --check`: 208 files already formatted.
+- `mypy`: no issues in 207 source files.
 - `uv lock --check` / `uv sync --check`: up to date, no changes.
 - Skips: one PostgreSQL TLS test because the temporary cluster had TLS enabled; two symlink
   tests because symlinks are unavailable on the Windows runner.

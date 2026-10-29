@@ -3,14 +3,14 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, ASM-1, and
-API-1 complete. Five transformations are registered in the versioned allowlist, structured
+**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, ASM-1, API-1, and
+TRN-0 complete. Ten transformations are registered in the versioned allowlist, structured
 plans are validated before execution, and the bounded run workflow handles intake, approval,
 execution, retries, cancellation, and cleanup. The FastAPI run contract exposes the workflow
 with background execution. Source-only requests run a read-only assessment, return a draft
 plan, and confirm into a validated pipeline plan. PostgreSQL connectivity, read-only ingestion
 adapters, and core quality profiling are available. The sandbox is an in-process guard;
-OS-level isolation remains deferred. Additional transformation batches remain in progress.
+OS-level isolation remains deferred. Transformation DSL work remains in progress.
 
 ## Architecture
 
@@ -231,8 +231,8 @@ database-backed assessment, and stale-source revalidation are tracked in
 
 ## Implemented transformations
 
-The first batch lives in `src/infrastructure/transformations/`. Each function returns a
-new DataFrame, validates its columns, preserves the input, and raises
+The transformation batches live in `src/infrastructure/transformations/`. Each function
+returns a new DataFrame, validates its columns, preserves the input, and raises
 `TransformationError` with stable metadata.
 
 | Function | Behavior |
@@ -242,11 +242,17 @@ new DataFrame, validates its columns, preserves the input, and raises
 | `trim_whitespace` | Trims leading, trailing, or both whitespace styles in text columns. |
 | `standardize_column_names` | Produces collision-free snake_case names with case policy. |
 | `cast_column` | Casts one column to string, integer, or float with raise/coerce modes. |
+| `filter_rows` | Keeps rows matching one literal predicate; supports comparisons, null checks, and text matching. |
+| `fill_missing_values` | Fills nulls in one column with a constant, mean, median, or mode. |
+| `normalize_dates` | Parses a text or datetime column and formats it with a strftime pattern. |
+| `change_text_case` | Applies lower, upper, or title case to selected or all text columns. |
+| `replace_values` | Replaces exact text matches with another string or with null. |
 
 These modules are registered in registry version `1.0.0`. The allowlist policy lives in
 `src/application/registry/specs.py`, concrete pandas callables are bound in
 `src/infrastructure/registry/bindings.py`, and metadata is exposed through
-`src/application/ports/module_registry.py`.
+`src/application/ports/module_registry.py`. Filtering, coercing date normalization, and
+nulling replacement require approval because they can remove or destroy values.
 
 ## Module registry
 
@@ -429,12 +435,12 @@ documents/
 
 ## Roadmap
 
-`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, `ASM-1`, and `API-1` are complete: plans are
-validated before execution, the sandbox enforces workspace, network, timeout, and memory
+`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, `ASM-1`, `API-1`, and `TRN-0` are complete: plans
+are validated before execution, the sandbox enforces workspace, network, timeout, and memory
 limits, the workflow bounds clarification, approval, retries, cancellation, and cleanup,
 PostgreSQL sessions are parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL
 reads are chunked with stable identifiers, core quality/info metrics merge from per-chunk
 state, source-only requests assess and confirm into validated pipeline plans, and the FastAPI
 run contract executes runs in the background. The next v1 items are `TRN-1`, `LOD-1`, `MON-1`,
 and `TST-1`. Advanced profiling, sampling, reporting, and future adapters are tracked in
-`documents/backlog_v2.txt`. Additional `TRN-0` transformation batches remain in progress.
+`documents/backlog_v2.txt`.

@@ -27,6 +27,11 @@ them.
 | ASM-5 | P2 | Draft editing and destination selection | v1 confirms the generated transformations and one destination as-is. User edits, multiple candidates, and ambiguity resolution are deferred. | ASM-1 |
 | ASM-6 | P2 | Stale-source revalidation | v1 does not re-check `content_hash` between assessment and confirmation/execution. | ASM-1, ASM-2 |
 | ASM-7 | P2 | Database-backed assessment | v1 assesses workspace files only. PostgreSQL assessment needs the configured-connection sandbox policy and secret-bearing connection approval. | ASM-1, DB-2 |
+| TRN-2 | P2 | Multi-condition and OR filtering | v1 filters with one literal predicate per step; multiple steps compose with AND. OR groups and nested predicates need a safe expression tree. | TRN-0, TRN-1 |
+| TRN-3 | P2 | Regex and substring replacement | v1 replaces exact text matches only. Regex or substring replacement needs ReDoS limits and explicit safety policy. | TRN-0, TRN-1 |
+| TRN-4 | P2 | Multi-column imputation and directional fill | v1 imputes one column with constant/mean/median/mode. Multi-column policies, forward/backward fill, and interpolation need chunk-state rules. | TRN-0, TRN-1 |
+| TRN-5 | P2 | Explicit date input formats and timezone policy | v1 parses with pandas `format="mixed"` and formats to text. Ambiguous formats, mixed timezones, and timezone conversion need an explicit contract. | TRN-0, TRN-1 |
+| TRN-6 | P2 | Column projection, rename, and drop | v1 has no column selection/rename/drop modules; these need destructive-operation classification and collision rules. | TRN-0, TRN-1 |
 | ST-2 | P1 | Persistent checkpoints and crash resume | v1 uses process-local memory only. | ST-1 |
 | DB-2 | P1 | Configured-connection sandbox policy | PostgreSQL reads exist but cannot be selected by validated plans because registry execution denies network access. | DB-1, EXE-1 |
 | API-2 | P2 | Retention, rate limiting, stronger auth | v1 exposes optional API-key protection and process-local logs. | API-1 |
@@ -51,6 +56,17 @@ them.
 - Assessment reports, HTML rendering, and optional narrative.
 - Artifact path exposure policy if the API is exposed beyond the local workspace
   (currently assessment responses include the writer's absolute paths).
+
+## Deferred transformation edge cases
+
+The v1 transformation batch deliberately stays single-column and literal:
+
+- OR/nested filter predicates; v1 composes multiple steps with AND.
+- Regex, wildcard, or substring replacement; v1 is exact-match only.
+- Multi-column imputation, forward/backward fill, and interpolation.
+- Explicit date input formats, ambiguous formats, and mixed-timezone normalization.
+- Column projection, rename, and drop modules.
+- Filters that target multiple columns in one step; use multiple steps.
 
 ## Deferred profiling edge cases
 

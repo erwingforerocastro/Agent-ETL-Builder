@@ -7,7 +7,11 @@ from application.registry.vocabulary import (
     CAST_ERROR_MODES,
     CAST_TARGET_TYPES,
     COLUMN_CASES,
+    DATE_PARSE_MODES,
+    FILL_METHODS,
+    FILTER_OPERATORS,
     KEEP_POLICIES,
+    TEXT_CASES,
     WHITESPACE_POLICIES,
 )
 from domain.entities.registry import Constraint, ConstraintKind
@@ -101,6 +105,77 @@ MODULE_SPECS: tuple[ModuleSpec, ...] = (
         supports_chunking=True,
         idempotent=True,
         security_notes="DataFrame-only; no I/O or code execution.",
+    ),
+    ModuleSpec(
+        name="filter_rows",
+        version="1.0.0",
+        description="Keep rows that match one declarative predicate on a column.",
+        constraints={
+            "column": (Constraint(ConstraintKind.COLUMN_NAME),),
+            "operator": (Constraint(ConstraintKind.ENUM, FILTER_OPERATORS),),
+        },
+        examples=({"column": "status", "operator": "equals", "value": "active"},),
+        supports_chunking=True,
+        idempotent=True,
+        security_notes="DataFrame-only; literal predicates; no code or regex execution.",
+    ),
+    ModuleSpec(
+        name="fill_missing_values",
+        version="1.0.0",
+        description="Fill null values in one column with a constant or summary value.",
+        constraints={
+            "column": (Constraint(ConstraintKind.COLUMN_NAME),),
+            "method": (Constraint(ConstraintKind.ENUM, FILL_METHODS),),
+        },
+        examples=({"column": "amount", "method": "mean"},),
+        supports_chunking=False,
+        idempotent=True,
+        security_notes="DataFrame-only; no I/O or code execution.",
+    ),
+    ModuleSpec(
+        name="normalize_dates",
+        version="1.0.0",
+        description="Parse a date column and format it with a strftime pattern.",
+        constraints={
+            "column": (Constraint(ConstraintKind.COLUMN_NAME),),
+            "output_format": (Constraint(ConstraintKind.NON_EMPTY),),
+            "errors": (Constraint(ConstraintKind.ENUM, DATE_PARSE_MODES),),
+        },
+        examples=({"column": "created_at", "output_format": "%Y-%m-%d"},),
+        supports_chunking=True,
+        idempotent=True,
+        security_notes="DataFrame-only; no I/O or code execution.",
+    ),
+    ModuleSpec(
+        name="change_text_case",
+        version="1.0.0",
+        description="Change the case of text values in selected or all text columns.",
+        constraints={
+            "columns": (
+                Constraint(ConstraintKind.NON_EMPTY),
+                Constraint(ConstraintKind.TEXT_COLUMNS),
+            ),
+            "case": (Constraint(ConstraintKind.ENUM, TEXT_CASES),),
+        },
+        examples=({"columns": ["name"], "case": "lower"},),
+        supports_chunking=True,
+        idempotent=True,
+        security_notes="DataFrame-only; no I/O or code execution.",
+    ),
+    ModuleSpec(
+        name="replace_values",
+        version="1.0.0",
+        description="Replace exact text values with another string or with null.",
+        constraints={
+            "columns": (
+                Constraint(ConstraintKind.NON_EMPTY),
+                Constraint(ConstraintKind.TEXT_COLUMNS),
+            )
+        },
+        examples=({"columns": ["status"], "old": "N/A", "new": None},),
+        supports_chunking=True,
+        idempotent=True,
+        security_notes="DataFrame-only; exact literal matching; no regex execution.",
     ),
     ModuleSpec(
         name="read_csv",

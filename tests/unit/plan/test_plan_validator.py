@@ -314,6 +314,38 @@ def test_invalid_enum_is_rejected(tmp_path: Path) -> None:
     _assert_code(plan, "PLAN_INVALID_ARGUMENT_TYPE", workspace=tmp_path)
 
 
+@pytest.mark.parametrize("value", ["active", 1, 1.5])
+def test_multi_union_argument_accepts_declared_types(
+    tmp_path: Path,
+    value: object,
+) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="filter_rows",
+                params={"column": "value", "operator": "equals", "value": value},
+            ),
+        )
+    )
+
+    _validator(tmp_path).validate(plan)
+
+
+def test_multi_union_argument_rejects_undeclared_types(tmp_path: Path) -> None:
+    plan = make_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="filter_rows",
+                params={"column": "value", "operator": "equals", "value": True},
+            ),
+        )
+    )
+
+    _assert_code(plan, "PLAN_INVALID_ARGUMENT_TYPE", workspace=tmp_path)
+
+
 def test_empty_optional_argument_is_rejected(tmp_path: Path) -> None:
     plan = make_plan(
         transformations=(
@@ -561,6 +593,81 @@ def test_coercing_cast_without_approval_is_rejected(tmp_path: Path) -> None:
     _assert_code(plan, "PLAN_APPROVAL_REQUIRED", workspace=tmp_path)
 
 
+def test_filter_rows_without_approval_is_rejected(tmp_path: Path) -> None:
+    plan = make_plan(
+        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="filter_rows",
+                params={"column": "status", "operator": "equals", "value": "active"},
+            ),
+        ),
+        approval_required=False,
+    )
+
+    _assert_code(plan, "PLAN_APPROVAL_REQUIRED", workspace=tmp_path)
+
+
+def test_coercing_date_normalization_without_approval_is_rejected(tmp_path: Path) -> None:
+    plan = make_plan(
+        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="normalize_dates",
+                params={
+                    "column": "created_at",
+                    "output_format": "%Y-%m-%d",
+                    "errors": "coerce",
+                },
+            ),
+        ),
+        approval_required=False,
+    )
+
+    _assert_code(plan, "PLAN_APPROVAL_REQUIRED", workspace=tmp_path)
+
+
+def test_null_replacement_without_approval_is_rejected(tmp_path: Path) -> None:
+    plan = make_plan(
+        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="replace_values",
+                params={"columns": ["status"], "old": "N/A", "new": None},
+            ),
+        ),
+        approval_required=False,
+    )
+
+    _assert_code(plan, "PLAN_APPROVAL_REQUIRED", workspace=tmp_path)
+
+
+def test_non_destructive_new_transform_variants_without_approval_pass(
+    tmp_path: Path,
+) -> None:
+    plan = make_plan(
+        destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="normalize_dates",
+                params={"column": "created_at", "output_format": "%Y-%m-%d"},
+            ),
+            PlanTransformation(
+                step_id="s2",
+                operation="replace_values",
+                params={"columns": ["status"], "old": "N/A", "new": "unknown"},
+            ),
+        ),
+        approval_required=False,
+    )
+
+    _validator(tmp_path).validate(plan)
+
+
 def test_read_only_plan_without_approval_passes(tmp_path: Path) -> None:
     plan = make_plan(
         destination=PlanDestination(operation="read_csv", params={"path": "copy.csv"}),
@@ -585,6 +692,20 @@ def test_assessment_with_destructive_transformation_is_rejected(tmp_path: Path) 
                 step_id="s1",
                 operation="drop_duplicate_rows",
                 params={},
+            ),
+        )
+    )
+
+    _assert_code(plan, "PLAN_UNSAFE_OPERATION", workspace=tmp_path)
+
+
+def test_assessment_with_filter_rows_is_rejected(tmp_path: Path) -> None:
+    plan = make_assessment_plan(
+        transformations=(
+            PlanTransformation(
+                step_id="s1",
+                operation="filter_rows",
+                params={"column": "status", "operator": "is_not_null"},
             ),
         )
     )

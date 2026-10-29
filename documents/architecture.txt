@@ -1,7 +1,7 @@
 # Agent ETL Builder - Architecture
 
-Version: 1.7
-Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, ASM-1, and API-1 implemented; TRN-0 in progress
+Version: 1.8
+Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, ASM-1, API-1, and TRN-0 implemented; TRN-1 next
 Last updated: 2026-10-29
 Scope: Module organization and runtime boundaries.
 
@@ -69,6 +69,8 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   explicit; consistency/validity rules, sampling, spill, and reports are v2 work. Accuracy is
   always `N/A`. Capped maps are marked approximate.
 - Transformation DSL: cleansing, casting, standardization, filtering, and imputation.
+  v1 implements ten allowlisted transformation modules; higher-level composition remains
+  TRN-1 work.
 - Loaders: atomic file writes and transactional PostgreSQL insert/upsert.
 - Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
 - State and lineage: local in-memory run checkpoints with plan, assessment, approval, hash,

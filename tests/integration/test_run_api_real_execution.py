@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pandas as pd
 import pytest
 from fastapi import FastAPI
 
@@ -140,6 +141,57 @@ def _pipeline_payload(run_id: str) -> dict[str, object]:
     }
 
 
+def _multi_transform_payload(run_id: str) -> dict[str, object]:
+    return {
+        "plan_version": "1.0",
+        "mode": "pipeline",
+        "run_id": run_id,
+        "name": "clean",
+        "description": "Run every transformation category",
+        "source": {"operation": "read_csv", "params": {"path": "input.csv"}},
+        "transformations": [
+            {
+                "step_id": "s1",
+                "operation": "trim_whitespace",
+                "params": {"columns": ["name"]},
+            },
+            {
+                "step_id": "s2",
+                "operation": "change_text_case",
+                "params": {"columns": ["name"], "case": "upper"},
+            },
+            {
+                "step_id": "s3",
+                "operation": "fill_missing_values",
+                "params": {"column": "amount", "method": "constant", "value": 0},
+            },
+            {
+                "step_id": "s4",
+                "operation": "normalize_dates",
+                "params": {
+                    "column": "created_at",
+                    "output_format": "%Y-%m-%d",
+                    "errors": "coerce",
+                },
+            },
+            {
+                "step_id": "s5",
+                "operation": "replace_values",
+                "params": {"columns": ["status"], "old": "missing", "new": None},
+            },
+            {
+                "step_id": "s6",
+                "operation": "filter_rows",
+                "params": {"column": "created_at", "operator": "is_not_null"},
+            },
+        ],
+        "destination": {"operation": "save_csv", "params": {"path": "output.csv"}},
+        "chunking": {"enabled": True, "size": 1000},
+        "on_error": "fail_fast",
+        "approval_required": True,
+    }
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
@@ -200,3 +252,44 @@ async def test_pipeline_run_executes_transformations_and_loader(tmp_path: Path) 
 
     logs = (await _request(app, "GET", "/runs/run-real-2/logs")).json()
     assert logs["logs"][-1]["event"] == "run_finished"
+
+
+@pytest.mark.anyio
+async def test_pipeline_executes_every_transformation_category(tmp_path: Path) -> None:
+    (tmp_path / "input.csv").write_text(
+        "name,amount,created_at,status\n"
+        " Ada ,1,2026-01-02,missing\n"
+        "BOB,,2026-12-31,active\n"
+        "Cy,3,not-a-date,missing\n",
+        encoding="utf-8",
+    )
+    app, scheduler = _build_app(tmp_path)
+
+    created = await _request(
+        app,
+        "POST",
+        "/runs",
+        json={"message": "Clean", "plan": _multi_transform_payload("run-real-3")},
+    )
+    assert created.status_code == 201
+    assert created.json()["status"] == "awaiting_approval"
+
+    approved = await _request(
+        app,
+        "POST",
+        "/runs/run-real-3/approve",
+        json={"approved": True},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "ready"
+
+    scheduler.run_all()
+
+    status = (await _request(app, "GET", "/runs/run-real-3")).json()
+    assert status["status"] == "succeeded"
+    output = pd.read_csv(tmp_path / "output.csv")
+    assert output["name"].tolist() == ["ADA", "BOB"]
+    assert output["amount"].tolist() == [1, 0]
+    assert output["created_at"].tolist() == ["2026-01-02", "2026-12-31"]
+    assert pd.isna(output["status"].iloc[0])
+    assert output["status"].iloc[1] == "active"

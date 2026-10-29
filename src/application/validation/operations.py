@@ -94,7 +94,9 @@ class OperationSafetyPolicy:
     def is_destructive(operation: str, params: Mapping[str, object]) -> bool:
         if operation in DESTRUCTIVE_OPERATIONS:
             return True
-        return operation == "cast_column" and params.get("errors") == "coerce"
+        if operation in {"cast_column", "normalize_dates"}:
+            return params.get("errors") == "coerce"
+        return operation == "replace_values" and params.get("new") is None
 
 
 __all__ = [

@@ -42,6 +42,11 @@ def test_registry_is_versioned_and_contains_the_approved_modules() -> None:
         "trim_whitespace",
         "standardize_column_names",
         "cast_column",
+        "filter_rows",
+        "fill_missing_values",
+        "normalize_dates",
+        "change_text_case",
+        "replace_values",
         "read_csv",
         "read_json",
         "read_jsonl",
@@ -74,6 +79,11 @@ def test_registry_metadata_matches_callable_signatures() -> None:
             "trim_whitespace",
             "standardize_column_names",
             "cast_column",
+            "filter_rows",
+            "fill_missing_values",
+            "normalize_dates",
+            "change_text_case",
+            "replace_values",
             "save_csv",
         ]:
             assert [item.name for item in module.inputs if item.pipeline_input] == ["df"]

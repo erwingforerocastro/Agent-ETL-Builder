@@ -105,7 +105,7 @@ WRITE_OPERATION_TOKENS = (
     "alter",
     "ddl",
 )
-DESTRUCTIVE_OPERATIONS = frozenset({"drop_duplicate_rows", "drop_empty_rows"})
+DESTRUCTIVE_OPERATIONS = frozenset({"drop_duplicate_rows", "drop_empty_rows", "filter_rows"})
 
 DANGEROUS_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)

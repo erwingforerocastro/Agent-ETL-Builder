@@ -458,7 +458,7 @@ cleanup. Those are deployment-level hardening items.
 | `validation/plan_hasher.py` | `CanonicalPlanHasher` (SHA-256 over canonical serialization). |
 | `validation/plan_sizer.py` | `CanonicalPlanSizer` (serialized size). |
 | `validation/plan_validator.py` | JSON-facing validation facade over the application validator. |
-| `transformations/` | Deterministic pandas transformations registered in the allowlist. |
+| `transformations/` | Deterministic pandas transformations: duplicate/empty-row removal, whitespace trimming, column-name standardization, casting, filtering, imputation, date normalization, text case changes, and exact replacement. |
 | `ingestion/csv.py` | CSV full and chunked readers. |
 | `ingestion/json.py` | JSON-array and JSONL full/chunked readers. |
 | `ingestion/parquet.py` | Parquet full and pyarrow-batch readers through sandbox-guarded file handles. |
@@ -470,6 +470,13 @@ cleanup. Those are deployment-level hardening items.
 | `assessment/source_reader.py` | `WorkspaceSourceReader`: safe source resolution, hashing, and chunk iteration for assessment. |
 | `assessment/intake.py` | `AssessmentPlanIntake` / factory: runs assessment intake and returns the report with missing inputs. |
 | `loaders/csv.py` | CSV destination adapter. |
+
+The transformation adapters are copy-on-write, deterministic, and raise structured
+`TransformationError` values. The current set is `drop_duplicate_rows`, `drop_empty_rows`,
+`trim_whitespace`, `standardize_column_names`, `cast_column`, `filter_rows`,
+`fill_missing_values`, `normalize_dates`, `change_text_case`, and `replace_values`.
+`filter_rows`, coercing date normalization, and nulling replacement are destructive and
+require approval.
 
 ### PostgreSQL sessions (`infrastructure/database/`)
 
