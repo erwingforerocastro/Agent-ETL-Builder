@@ -1,10 +1,13 @@
 from importlib.metadata import version
 
 import main
+from application.assessment.assess_source import AssessSourceUseCase
 from application.use_cases.execute_plan import ExecutePlanUseCase
+from application.use_cases.profile_source import ProfileSourceUseCase
 from application.use_cases.run_manager import RunManager
 from application.validation.plan_validator import PlanValidator
 from infrastructure.approval.in_memory import InMemoryApprovalGateway
+from infrastructure.assessment.source_reader import WorkspaceSourceReader
 from infrastructure.cleanup.filesystem import FilesystemCleanup
 from infrastructure.database.postgres import PostgresDatabase
 from infrastructure.logging.run_log import InMemoryRunLog
@@ -52,6 +55,15 @@ def test_composition_root_wires_the_run_api() -> None:
     assert main.app.state.run_manager is main.run_manager
     assert main.app.state.run_log is main.run_log
     assert main.app.state.run_scheduler is main.run_scheduler
+
+
+def test_composition_root_wires_source_assessment() -> None:
+    assert isinstance(main.profile_source, ProfileSourceUseCase)
+    assert isinstance(main.source_reader, WorkspaceSourceReader)
+    assert isinstance(main.assessment, AssessSourceUseCase)
+    assert main.app.state.profile_source is main.profile_source
+    assert main.app.state.profile_writer is main.profile_writer
+    assert main.app.state.assessment is main.assessment
 
 
 def test_composition_root_wires_the_optional_database_adapter() -> None:

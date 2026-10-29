@@ -9,6 +9,7 @@ from application.validation.constants import RUN_ID_PATTERN
 from interfaces.api.schemas.runs import (
     ErrorResponse,
     RunApprovalRequest,
+    RunConfirmRequest,
     RunCreateRequest,
     RunLogEntryResponse,
     RunLogsResponse,
@@ -70,6 +71,17 @@ def create_run_router(run_manager: RunManager) -> APIRouter:
         run_id: str = _RUN_ID,
     ) -> RunResponse:
         return RunResponse.from_outcome(run_manager.approve(run_id, request.approved))
+
+    @router.post(
+        "/{run_id}/confirm",
+        response_model=RunResponse,
+        responses=_ERROR_RESPONSES,
+    )
+    def confirm_run(
+        request: RunConfirmRequest,
+        run_id: str = _RUN_ID,
+    ) -> RunResponse:
+        return RunResponse.from_outcome(run_manager.confirm(run_id, request.destination))
 
     @router.post(
         "/{run_id}/cancel",

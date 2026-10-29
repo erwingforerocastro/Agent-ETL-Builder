@@ -1,7 +1,7 @@
 # Agent ETL Builder - Architecture
 
-Version: 1.6
-Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, and API-1 implemented; TRN-0 in progress
+Version: 1.7
+Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, ASM-1, and API-1 implemented; TRN-0 in progress
 Last updated: 2026-10-29
 Scope: Module organization and runtime boundaries.
 
@@ -12,7 +12,7 @@ LangGraph, FastAPI, pandas, PostgreSQL drivers, or other infrastructure.
 
 | Layer | Responsibility |
 |---|---|
-| domain/entities | Plans, registry entries, runs, artifacts, approvals, errors |
+| domain/entities | Plans, registry entries, runs, assessments, artifacts, approvals, errors |
 | application/use_cases | Assess sources, build/validate/execute plans, run the bounded workflow, profile, merge, load, cancel |
 | application/validation | Plan validation policy: schema, registry, arguments, paths, limits, security, approval |
 | application/registry | Allowlist specs, versions, constraints, examples, and side-effect policy |
@@ -32,8 +32,13 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - Plan builder/validator: schema, allowlist, arguments, paths, limits, security, approval.
   Policy checks live in `application/validation`; Pydantic parsing, plan size measurement,
   and filesystem probing are infrastructure adapters.
-- Source assessor: read-only source validation, full-source profiling, and draft-plan inputs.
-  Bounded sampling is deferred to the v2 backlog.
+- Source assessor: `AssessSourceUseCase` resolves a workspace file through a reader port,
+  profiles the full source through `ProfileSourceUseCase`, and derives issues, assumptions,
+  selected metrics, missing inputs, and a conservative draft plan. It runs under the sandbox
+  runner. `AssessmentPlanIntake` runs it for source-only requests; confirmation builds a
+  validated `save_csv` pipeline plan and rejects a destination that would overwrite the source.
+  Bounded sampling, inline intent detection, caching, draft editing, and database-backed
+  assessment are deferred to v2.
 - Interpreter: an application use case validates the plan, then orchestrates steps through
   a step-runner port; pandas and sandbox mechanics live in infrastructure.
 - Sandbox: one serialized in-process execution guard. It confines file content access to
@@ -66,9 +71,9 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - Transformation DSL: cleansing, casting, standardization, filtering, and imputation.
 - Loaders: atomic file writes and transactional PostgreSQL insert/upsert.
 - Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
-- State and lineage: local in-memory run checkpoints with plan, approval, hash, status, and
-  error state. The API manager keeps execution results in process memory. Transform/execution
-  logs and full artifact lineage are implemented with MON-1.
+- State and lineage: local in-memory run checkpoints with plan, assessment, approval, hash,
+  status, and error state. The API manager keeps execution results in process memory.
+  Transform/execution logs and full artifact lineage are implemented with MON-1.
 - Agent workflow: a plain application state machine, one instance per run. It bounds plan
   intake/clarification, validation, approval, execution, retry, cancellation, and cleanup.
   External effects are ports; run snapshots are saved after every transition.
@@ -76,12 +81,13 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   `artifacts/<run_id>/`. The source is never mutated. Metrics carry stable formulas and
   definition versions; `accuracy` is `N/A` until a formula/reference rules are supplied.
   Reports and sampling are deferred to the v2 backlog.
-- API: FastAPI routes for run creation/status, approval, cancellation, lifecycle logs, and
-  health. A `RunManager` owns per-run workflow instances (each with its cancellation token),
-  schedules execution on a background thread pool, and keeps process-local outcomes and logs.
-  Pydantic plan payloads are parsed by an infrastructure adapter; invalid plans are rejected
-  before a run is created. Errors use a consistent envelope. Optional `AGENT_ETL_API_KEY`
-  protection and a request-size limit are enforced by middleware.
+- API: FastAPI routes for run creation/status, assessment confirmation, approval,
+  cancellation, lifecycle logs, and health. A `RunManager` owns per-run workflow instances
+  (each with its cancellation token), selects assessment or submitted-plan intake, schedules
+  execution on a background thread pool, and keeps process-local outcomes and logs. Pydantic
+  plan payloads are parsed by an infrastructure adapter; invalid plans are rejected before a
+  run is created. Errors use a consistent envelope. Optional `AGENT_ETL_API_KEY` protection and
+  a request-size limit are enforced by middleware.
 
 ## Run lifecycle
 
@@ -89,7 +95,8 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   `retrying`, `succeeded`, `failed`, `rejected`, `cancelled`, `timed_out`.
 - Terminal states: `succeeded`, `failed`, `rejected`, `cancelled`, `timed_out`.
 - A run stores its plan, plan hash, registry version, status, attempt count, approval state,
-  clarification attempts, questions/missing inputs, error, and timestamps.
+  clarification attempts, questions/missing inputs, error, timestamps, and an optional
+  assessment report. `assessment_id` is derived from the attached report.
 - Approval is required when the registry policy marks any operation as a write/destructive
   action, or when the plan explicitly requests it. The workflow waits with a configurable
   timeout; an approval timeout is a terminal `timed_out` state.
@@ -116,21 +123,26 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 
 ## Source-only flow
 
-1. Detect a source-only request.
-2. Validate source access and schema.
-3. Run a read-only full-source assessment. Bounded sampling is a v2 candidate.
-4. Derive issues, candidate transformations, assumptions, and missing inputs.
-5. Present a draft plan; after confirmation, build and validate the executable plan.
+1. Detect a source-only request: explicit `source`, no plan, and no destination.
+2. Resolve a workspace-confined CSV, JSON, JSONL, or Parquet file and validate access.
+3. Run a read-only full-source assessment and write only assessment artifacts.
+4. Derive issues, candidate transformations, assumptions, selected metrics, and missing inputs.
+5. Present the assessment and draft plan; keep the run in `awaiting_clarification`.
+6. `POST /runs/{run_id}/confirm` supplies the destination, builds a `save_csv` pipeline plan,
+   rejects source overwrite, and validates the plan before approval and execution.
+
+Inline source paths in messages, bounded sampling, assessment timeouts, caching, draft editing,
+source-change revalidation, and database-backed assessment are v2 candidates.
 
 ## Project layout
 
 - `src/domain/` entities and contracts.
 - `src/application/` use cases, ports, validation policy, and registry policy.
 - `src/infrastructure/` PostgreSQL, file, LLM, local-memory run checkpoint, approval gateway,
-  cleanup, clock, database sessions, ingestion readers and identifiers, profiling/artifact
-  writers, deterministic/submitted plan intake, Pydantic schema and plan parser, filesystem
-  probe, plan sizer/hasher, registry bindings, sandbox, background scheduler, run log, and
-  logging adapters.
+  cleanup, clock, database sessions, ingestion readers and identifiers, assessment source
+  reader/intake, profiling/artifact writers, deterministic/submitted plan intake, Pydantic
+  schema and plan parser, filesystem probe, plan sizer/hasher, registry bindings, sandbox,
+  background scheduler, run log, and logging adapters.
 - `src/interfaces/` FastAPI routes and schemas.
 - `src/main.py` composition root.
 - `tests/` unit, integration, edge-case, and security tests.
@@ -144,14 +156,15 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
 - `interfaces/` receives requests and calls `application/` use cases.
 - `application/` assesses sources, profiles and merges chunk records, builds and validates
   plans, then calls `infrastructure/` adapters through ports.
-- `infrastructure/` reads/writes PostgreSQL and files, profiles pandas chunks, writes quality
-  and info artifacts, calls LLMs, checkpoints state, parses JSON plans, measures serialized
-  plan size, probes the workspace, and runs sandboxed steps with workspace, network, time, and
-  memory guards.
+- `infrastructure/` reads/writes PostgreSQL and files, resolves assessment sources, profiles
+  pandas chunks, writes quality and info artifacts, calls LLMs, checkpoints state, parses JSON
+  plans, measures serialized plan size, probes the workspace, and runs sandboxed steps with
+  workspace, network, time, and memory guards.
 - `domain/` holds shared entities and validates core invariants.
 - Plan validation and registry allowlists are application policy; Pydantic schemas,
   filesystem inspection, and concrete callables are infrastructure adapters.
 - Run artifacts and logs are written under `artifacts/<run_id>/` and `logs/`.
 - The registry, plan, transform log, and execution log are the boundaries between modules.
-- The source-only branch uses the assessment use case and writes only assessment artifacts;
-  it cannot write to the destination.
+- The source-only branch uses `AssessSourceUseCase` through `AssessmentPlanIntake`; it writes
+  only assessment artifacts, cannot write to the destination, and builds the executable plan
+  only after `POST /runs/{run_id}/confirm`.

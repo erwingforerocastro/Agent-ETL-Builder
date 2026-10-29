@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from application.assessment.confirmation import build_pipeline_plan
 from application.ports.approval import ApprovalPort
 from application.ports.cancellation import CancellationTokenPort
 from application.ports.cleanup import CleanupPort
@@ -20,9 +21,12 @@ from application.use_cases.run_state import RunStore, RunTerminator
 from application.validation.operations import OperationCatalog, OperationSafetyPolicy
 from domain.entities.run import ApprovalState, PlanRequest, Run, RunStatus, WorkflowLimits
 from domain.errors import (
+    PlanValidationError,
     RunAlreadyExistsError,
     RunCancelledError,
+    RunExecutionError,
     RunInvalidStateError,
+    RunPlanStaleError,
 )
 
 
@@ -50,6 +54,8 @@ class RunWorkflow:
     ) -> None:
         self._registry = registry
         self._clock = clock
+        self._validator = validator
+        self._hasher = hasher
         self._cancellation = cancellation
         self._limits = limits or WorkflowLimits()
         self._store = RunStore(checkpoints)
@@ -127,6 +133,53 @@ class RunWorkflow:
             run = outcome.run
         if run.status is RunStatus.READY:
             return self._execution.execute(run)
+        return RunOutcome(run)
+
+    def confirm(self, destination: str) -> RunOutcome:
+        """Build and validate a pipeline plan from an assessed source."""
+        run = self._load()
+        if (
+            run.status is not RunStatus.AWAITING_CLARIFICATION
+            or run.assessment is None
+            or run.mode != "pipeline"
+        ):
+            raise RunInvalidStateError(status=run.status.value, operation="confirm")
+        if self._registry.snapshot().version != run.registry_version:
+            return self._terminator.terminate(
+                run,
+                RunStatus.FAILED,
+                RunPlanStaleError(reason="registry version changed"),
+                cleanup=True,
+            )
+        try:
+            plan = build_pipeline_plan(run.assessment, destination=destination)
+        except ValueError as exc:
+            raise PlanValidationError(
+                code="PLAN_INVALID_DESTINATION",
+                message=str(exc),
+                module=__name__,
+            ) from exc
+        self._validator.validate(plan)
+        try:
+            plan_hash = self._hasher.hash(plan)
+        except Exception as exc:
+            return self._terminator.terminate(
+                run,
+                RunStatus.FAILED,
+                RunExecutionError(error_type=type(exc).__name__),
+                cleanup=True,
+            )
+        run = run.transition(
+            RunStatus.AWAITING_APPROVAL,
+            now=self._clock.now(),
+            approval_state=ApprovalState.PENDING,
+            plan=plan,
+            plan_hash=plan_hash,
+            questions=(),
+            missing_inputs=(),
+            error=None,
+        )
+        self._store.save(run)
         return RunOutcome(run)
 
     def approve(self, approved: bool) -> RunOutcome:

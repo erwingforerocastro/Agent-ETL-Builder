@@ -1,8 +1,8 @@
 # Agent ETL Builder - Backlog (v1)
 
-Version: 1.5
+Version: 1.6
 Scope: v1 delivery only
-Status: PRF-1 simplified complete; ASM-1 next; TRN-0 in progress
+Status: ASM-1 complete; TRN-0 in progress
 Last updated: 2026-10-29
 
 Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
@@ -20,7 +20,7 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
 | WF-1 | P0 | Bounded agent workflow | PLN-1, EXE-1 | Clarification, approval, execution, retry, cancel, and cleanup paths reach a terminal state. | Done |
 | ING-1 | P1 | Ingestion adapters | FND-1, DB-1 | CSV, JSON/JSONL, Parquet, and PostgreSQL reads are read-only, chunked, and produce stable IDs. | Done |
 | PRF-1 | P1 | Core profiling and chunk merge | ING-1 | Completeness, uniqueness, numeric/date/categorical statistics, and quality/info artifacts use explicit formulas; per-chunk records merge; accuracy is `N/A`. Advanced rules, sampling, spill, and reports are v2. | Done |
-| ASM-1 | P1 | Source-only assessment and draft plan | ING-1, PRF-1, PLN-1, EXE-1 | Source-only intent is detected; read-only full-source assessment runs; draft plan lists issues, assumptions, and missing inputs; no writes; confirmation builds an executable plan. | Pending |
+| ASM-1 | P1 | Source-only assessment and draft plan | ING-1, PRF-1, PLN-1, EXE-1 | Source-only intent is detected; read-only full-source assessment runs; draft plan lists issues, assumptions, and missing inputs; no writes; confirmation builds an executable plan. | Done |
 | TRN-0 | P1 | Reusable transformation modules | FND-1 | Separate, deterministic, idempotent modules are added in batches of five; inputs are not mutated; failures use structured errors. | In progress |
 | TRN-1 | P1 | Transformation DSL | TRN-0, PLN-1 | Cleansing, casting, standardization, filtering, and imputation are deterministic and idempotent. | Pending |
 | LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and PostgreSQL insert/upsert/truncate modes are transactional and safe. | Pending |
@@ -44,10 +44,22 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
   restart loses active runs, stored API results, and logs.
 - `RunManager` retains workflows, outcomes, and logs for the process lifetime; a retention or
   eviction policy is needed for long-running multi-run deployments.
+- Source-only assessment requires an explicit `source` reference. Message-only requests that
+  mention a path inline still return `awaiting_clarification`; inline intent detection is v2.
+- Assessment runs synchronously during run creation and uses a full scan. Large sources can
+  delay the response; bounded sampling, an assessment timeout, and background assessment are
+  v2 work.
+- Assessment results are not cached, and confirmation does not re-check the source content
+  hash. Source changes between assessment and execution are caught only by normal execution
+  validation; cache invalidation and stale-source checks are v2.
+- The v1 confirmation flow accepts a destination but does not allow editing the draft
+  transformations or choosing among multiple destinations; those are v2.
+- Assessment artifacts are written below `artifacts/<run_id>/`. A pending or failed
+  assessment can leave partial artifacts until the run is cancelled or cleaned up.
 - API logs currently contain lifecycle events; transform CSV and execution JSONL logging
   arrive with MON-1.
-- Message-only run creation returns `awaiting_clarification` until a plan builder is
-  configured; API-1 exposes no resume endpoint.
+- Message-only run creation without a source or plan returns `awaiting_clarification`; API-1
+  exposes no resume endpoint.
 - `AGENT_ETL_API_KEY` optionally protects `/runs`; rate limiting and production auth
   hardening remain deployment controls.
 - PostgreSQL sessions open one connection per session; connection pooling, pool exhaustion

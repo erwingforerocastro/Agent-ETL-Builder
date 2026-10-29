@@ -17,6 +17,7 @@ from application.ports.plan_intake import PlanIntakePort
 from application.registry.specs import MODULE_SPECS
 from application.use_cases.execution_result import PlanExecutionResult
 from application.use_cases.run_workflow import RunWorkflow
+from domain.entities.assessment import AssessmentReport, DraftPlan
 from domain.entities.plan import (
     ExecutionPlan,
     PlanChunking,
@@ -102,6 +103,32 @@ def _write_plan(*, run_id: str = "run-1") -> ExecutionPlan:
         chunking=PlanChunking(enabled=True, size=1000),
         on_error="fail_fast",
         approval_required=False,
+    )
+
+
+def _assessment_report(*, run_id: str = "run-1") -> AssessmentReport:
+    return AssessmentReport(
+        assessment_id=f"asm_{run_id}",
+        run_id=run_id,
+        source_id="src_abc",
+        source_type="csv",
+        row_count=2,
+        column_count=1,
+        content_hash="sha256:source",
+        schema_hash="sha256:schema",
+        issues=(),
+        assumptions=("The source was read fully.",),
+        missing_inputs=("destination",),
+        draft_plan=DraftPlan(
+            name="assess_src",
+            description="Assess the source",
+            source_operation="read_csv",
+            source_params={"path": "input.csv"},
+            transformations=(),
+            chunking=PlanChunking(enabled=True, size=1000),
+            rationale=("No transformation candidates were derived.",),
+        ),
+        chunk_count=1,
     )
 
 
@@ -845,3 +872,90 @@ def test_get_after_checkpoint_removal_raises_not_found() -> None:
 
     with pytest.raises(RunNotFoundError):
         harness.workflow.get()
+
+
+def test_confirm_builds_a_pipeline_plan_from_the_assessment() -> None:
+    harness = _build(
+        [
+            PlanIntakeResult(
+                assessment=_assessment_report(),
+                questions=("Confirm the draft plan.",),
+                missing_inputs=("destination",),
+            )
+        ]
+    )
+    started = harness.workflow.start(_request(mode="pipeline"))
+
+    outcome = harness.workflow.confirm("output.csv")
+
+    assert started.run.status is RunStatus.AWAITING_CLARIFICATION
+    assert started.run.assessment_id == "asm_run-1"
+    assert outcome.run.status is RunStatus.AWAITING_APPROVAL
+    assert outcome.run.approval_state is ApprovalState.PENDING
+    assert outcome.run.questions == ()
+    assert outcome.run.missing_inputs == ()
+    assert outcome.run.plan is not None
+    assert outcome.run.plan.mode == "pipeline"
+    assert outcome.run.plan.destination is not None
+    assert outcome.run.plan.destination.operation == "save_csv"
+    assert outcome.run.plan.destination.params == {"path": "output.csv"}
+    assert outcome.run.plan_hash == "hash-1"
+    assert harness.executor.calls == 0
+
+
+def test_confirm_requires_an_assessment_and_pipeline_mode() -> None:
+    no_assessment = _build([PlanIntakeResult(questions=("Q",))])
+    no_assessment.workflow.start(_request(mode="pipeline"))
+    assessment_mode = _build([PlanIntakeResult(assessment=_assessment_report(), questions=("Q",))])
+    assessment_mode.workflow.start(_request(mode="assessment"))
+
+    with pytest.raises(RunInvalidStateError):
+        no_assessment.workflow.confirm("output.csv")
+    with pytest.raises(RunInvalidStateError):
+        assessment_mode.workflow.confirm("output.csv")
+
+
+def test_confirm_rejects_source_overwrite_and_keeps_the_run_pending() -> None:
+    harness = _build([PlanIntakeResult(assessment=_assessment_report(), questions=("Q",))])
+    harness.workflow.start(_request(mode="pipeline"))
+
+    with pytest.raises(PlanValidationError) as caught:
+        harness.workflow.confirm("input.csv")
+
+    assert caught.value.code == "PLAN_INVALID_DESTINATION"
+    assert harness.workflow.get().status is RunStatus.AWAITING_CLARIFICATION
+
+
+def test_confirm_propagates_validator_failures_without_changing_state() -> None:
+    error = PlanValidationError(
+        code="PLAN_INVALID_PATH",
+        message="Path is not allowed",
+        module="test",
+    )
+    harness = _build(
+        [PlanIntakeResult(assessment=_assessment_report(), questions=("Q",))],
+        validator=_SequenceValidator([error]),
+    )
+    harness.workflow.start(_request(mode="pipeline"))
+
+    with pytest.raises(PlanValidationError):
+        harness.workflow.confirm("output.csv")
+
+    assert harness.workflow.get().status is RunStatus.AWAITING_CLARIFICATION
+
+
+def test_confirm_fails_when_the_registry_became_stale() -> None:
+    registry = _MutableRegistry(REGISTRY)
+    harness = _build(
+        [PlanIntakeResult(assessment=_assessment_report(), questions=("Q",))],
+        registry=registry,
+    )
+    harness.workflow.start(_request(mode="pipeline"))
+    registry.version = "2.0.0"
+
+    outcome = harness.workflow.confirm("output.csv")
+
+    assert outcome.run.status is RunStatus.FAILED
+    assert outcome.run.error is not None
+    assert outcome.run.error.code == "RUN_PLAN_STALE"
+    assert harness.cleanup.calls

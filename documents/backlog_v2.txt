@@ -1,6 +1,6 @@
 # Agent ETL Builder - Backlog (v2 candidates)
 
-Version: 2.0-draft
+Version: 2.1-draft
 Status: Deferred work; not part of v1 acceptance
 Last updated: 2026-10-29
 
@@ -22,12 +22,34 @@ them.
 | PRF-7 | P2 | ISO 8601 duration and richer date output | v1 exposes date min/max/range seconds only. | PRF-1 |
 | PRF-8 | P2 | Corrupt chunk record recovery | v1 validates in-memory chunk order and schema. Reloading, repairing, or resuming from persisted records is not implemented. | PRF-1 |
 | ASM-2 | P1 | Assessment cache by content/schema hash | v1 keeps assessment simple; caching and invalidation are optimization work. | ASM-1, PRF-3 |
+| ASM-3 | P1 | Inline source intent detection | v1 requires an explicit `source` field. Natural-language path extraction and ambiguity checks need a model-assisted intent layer. | ASM-1 |
+| ASM-4 | P1 | Assessment timeout and background execution | v1 assesses synchronously with a full scan. Large sources need a bounded timeout, progress state, and background scheduling. | ASM-1, PRF-3 |
+| ASM-5 | P2 | Draft editing and destination selection | v1 confirms the generated transformations and one destination as-is. User edits, multiple candidates, and ambiguity resolution are deferred. | ASM-1 |
+| ASM-6 | P2 | Stale-source revalidation | v1 does not re-check `content_hash` between assessment and confirmation/execution. | ASM-1, ASM-2 |
+| ASM-7 | P2 | Database-backed assessment | v1 assesses workspace files only. PostgreSQL assessment needs the configured-connection sandbox policy and secret-bearing connection approval. | ASM-1, DB-2 |
 | ST-2 | P1 | Persistent checkpoints and crash resume | v1 uses process-local memory only. | ST-1 |
 | DB-2 | P1 | Configured-connection sandbox policy | PostgreSQL reads exist but cannot be selected by validated plans because registry execution denies network access. | DB-1, EXE-1 |
 | API-2 | P2 | Retention, rate limiting, stronger auth | v1 exposes optional API-key protection and process-local logs. | API-1 |
 | EXP-1 | P2 | Python export | Fixed-template export is an artifact only and is not on the v1 execution path. | PLN-1, TST-1 |
 | ADP-1 | P2 | Future database adapters | v1 is PostgreSQL-only; MySQL, Oracle, and MongoDB remain future adapters. | LOD-1 |
 | OBS-1 | P2 | Dashboards and alerts | Metrics and traces are deployment concerns after MON-1. | MON-1 |
+
+## Deferred assessment edge cases
+
+- Inline source paths in messages; ambiguous or multiple candidate sources.
+- Bounded sampling for large sources, assessment confidence, and background progress.
+- Assessment timeout, cancellation mid-scan, and retry policy.
+- Cache lookup/invalidation by `content_hash` and `schema_hash`.
+- Re-checking the source hash after assessment and before confirmation/execution.
+- User-edited drafts, multiple destination candidates, and explicit rejection of a draft.
+- Destination format selection beyond the fixed v1 `save_csv` confirmation.
+- Empty-source confirmation policy (allow or reject a vacuous load).
+- Schema drift between assessment, confirmation, and execution.
+- Assessment of PostgreSQL/new secret-bearing connections and one-time approval.
+- Partial assessment artifact retention/cleanup and restart recovery.
+- Assessment reports, HTML rendering, and optional narrative.
+- Artifact path exposure policy if the API is exposed beyond the local workspace
+  (currently assessment responses include the writer's absolute paths).
 
 ## Deferred profiling edge cases
 

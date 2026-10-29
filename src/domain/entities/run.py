@@ -13,6 +13,7 @@ from domain.entities._validation import (
     require_non_negative_int,
     require_text,
 )
+from domain.entities.assessment import AssessmentReport
 from domain.entities.plan import ExecutionPlan
 from domain.errors import EtlError
 
@@ -184,17 +185,18 @@ class PlanRequest:
 
 @dataclass(frozen=True, slots=True)
 class PlanIntakeResult:
-    """Either a proposed plan or the next clarification/repair request."""
+    """Either a proposed plan, assessment findings, or clarification input."""
 
     plan: ExecutionPlan | None = None
     questions: tuple[str, ...] = ()
     missing_inputs: tuple[str, ...] = ()
     reason: str | None = None
+    assessment: AssessmentReport | None = None
 
     def __post_init__(self) -> None:
-        if self.plan is not None and (self.questions or self.reason):
+        if self.plan is not None and (self.questions or self.reason or self.assessment is not None):
             raise ValueError("plan and clarification data are mutually exclusive")
-        if self.plan is None and not self.questions and not self.reason:
+        if self.plan is None and not self.questions and not self.reason and self.assessment is None:
             raise ValueError("intake result must provide a plan or clarification data")
         if any(not question.strip() for question in self.questions):
             raise ValueError("clarification questions must not be blank")
@@ -202,6 +204,8 @@ class PlanIntakeResult:
             raise ValueError("missing inputs must not be blank")
         if self.reason is not None and not self.reason.strip():
             raise ValueError("reason must not be blank")
+        if self.assessment is not None and not isinstance(self.assessment, AssessmentReport):
+            raise ValueError("assessment must be an AssessmentReport")
 
     @property
     def needs_input(self) -> bool:
@@ -227,6 +231,7 @@ class Run:
     error: EtlError | None
     created_at: datetime
     updated_at: datetime
+    assessment: AssessmentReport | None = None
 
     def __post_init__(self) -> None:
         require_text(self.run_id, "run_id")
@@ -254,6 +259,10 @@ class Run:
             raise ValueError("questions must not be blank")
         if any(not item.strip() for item in self.missing_inputs):
             raise ValueError("missing_inputs must not be blank")
+        if self.assessment is not None and not isinstance(self.assessment, AssessmentReport):
+            raise ValueError("assessment must be an AssessmentReport")
+        if self.assessment is not None and self.assessment.run_id != self.run_id:
+            raise ValueError("assessment run_id must match the run")
 
         if (
             self.status is RunStatus.AWAITING_APPROVAL
@@ -287,6 +296,11 @@ class Run:
             and self.plan is None
         ):
             raise ValueError(f"{self.status} runs must have a plan")
+
+    @property
+    def assessment_id(self) -> str | None:
+        """Return the id of the attached assessment, when present."""
+        return self.assessment.assessment_id if self.assessment is not None else None
 
     @classmethod
     def create(
@@ -330,6 +344,7 @@ class Run:
         questions: tuple[str, ...] | None = None,
         missing_inputs: tuple[str, ...] | None = None,
         error: EtlError | None = None,
+        assessment: AssessmentReport | None = None,
     ) -> Run:
         """Return the next run state, enforcing lifecycle transitions."""
         require_aware_datetime(now, "now")
@@ -353,6 +368,7 @@ class Run:
             questions=self.questions if questions is None else questions,
             missing_inputs=self.missing_inputs if missing_inputs is None else missing_inputs,
             error=error,
+            assessment=self.assessment if assessment is None else assessment,
             updated_at=now,
         )
 

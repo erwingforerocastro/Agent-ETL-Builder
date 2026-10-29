@@ -48,6 +48,13 @@ class RunCreateCommand:
     plan_payload: Mapping[str, object] | None = None
 
 
+def _is_source_only(command: RunCreateCommand) -> bool:
+    """A source without a plan or destination starts with assessment."""
+    return (
+        command.plan_payload is None and command.source is not None and command.destination is None
+    )
+
+
 class RunManager:
     """Tracks live workflows and schedules execution outside the request thread."""
 
@@ -63,11 +70,13 @@ class RunManager:
         scheduler: BackgroundSchedulerPort,
         clock: ClockPort,
         cancellation_factory: Callable[[], CancellationTokenPort],
+        assessment_intake_factory: PlanIntakeFactoryPort | None = None,
     ) -> None:
         self._workflow_factory = workflow_factory
         self._plan_parser = plan_parser
         self._validator = validator
         self._intake_factory = intake_factory
+        self._assessment_intake_factory = assessment_intake_factory
         self._checkpoints = checkpoints
         self._run_log = run_log
         self._scheduler = scheduler
@@ -87,7 +96,7 @@ class RunManager:
         request = self._request(command, run_id=run_id, mode=mode, plan=plan)
         cancellation = self._cancellation_factory()
         workflow = self._workflow_factory.create(
-            intake=self._intake_factory.create(plan),
+            intake=self._select_intake(command, plan),
             cancellation=cancellation,
         )
 
@@ -101,6 +110,22 @@ class RunManager:
             "run_created",
             status=outcome.run.status.value,
             context={"mode": mode, "plan_supplied": plan is not None},
+        )
+        if outcome.run.status is RunStatus.READY:
+            self._schedule(run_id)
+        return outcome
+
+    def confirm(self, run_id: str, destination: str) -> RunOutcome:
+        """Confirm an assessment and build the executable pipeline plan."""
+        workflow = self._require_workflow(run_id, operation="confirm")
+        outcome = workflow.confirm(destination)
+        with self._lock:
+            self._outcomes[run_id] = outcome
+        self._log(
+            run_id,
+            "assessment_confirmed",
+            status=outcome.run.status.value,
+            context={"plan_hash": outcome.run.plan_hash},
         )
         if outcome.run.status is RunStatus.READY:
             self._schedule(run_id)
@@ -255,6 +280,19 @@ class RunManager:
 
     def _parse_plan(self, payload: Mapping[str, object] | None) -> ExecutionPlan | None:
         return self._plan_parser.parse(payload) if payload is not None else None
+
+    def _select_intake(
+        self,
+        command: RunCreateCommand,
+        plan: ExecutionPlan | None,
+    ) -> PlanIntakePort:
+        if (
+            plan is None
+            and self._assessment_intake_factory is not None
+            and _is_source_only(command)
+        ):
+            return self._assessment_intake_factory.create(None)
+        return self._intake_factory.create(plan)
 
     def _resolve_identity(
         self,

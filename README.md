@@ -3,13 +3,14 @@
 Local-first agent that builds validated ETL pipelines from a structured request or a
 source-only assessment.
 
-**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, and API-1
-complete. Five transformations are registered in the versioned allowlist, structured plans are
-validated before execution, and the bounded run workflow handles intake, approval, execution,
-retries, cancellation, and cleanup. The FastAPI run contract exposes the workflow with
-background execution. PostgreSQL connectivity, read-only ingestion adapters, and core
-quality profiling are available. The sandbox is an in-process guard; OS-level isolation remains
-deferred. Additional transformation batches remain in progress.
+**Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, ASM-1, and
+API-1 complete. Five transformations are registered in the versioned allowlist, structured
+plans are validated before execution, and the bounded run workflow handles intake, approval,
+execution, retries, cancellation, and cleanup. The FastAPI run contract exposes the workflow
+with background execution. Source-only requests run a read-only assessment, return a draft
+plan, and confirm into a validated pipeline plan. PostgreSQL connectivity, read-only ingestion
+adapters, and core quality profiling are available. The sandbox is an in-process guard;
+OS-level isolation remains deferred. Additional transformation batches remain in progress.
 
 ## Architecture
 
@@ -203,6 +204,28 @@ types; incompatible categorical/numeric/date mixes or naive/aware datetime mixes
 `PROFILE_SCHEMA_DRIFT`. Per-chunk and final artifacts live in the run folder and follow the
 cleanup policy. The deterministic HTML summary and optional narrative are v2 work.
 
+## Source-only assessment
+
+A request that supplies `source` but no structured plan or destination starts with a read-only
+assessment. `RunManager` selects `AssessmentPlanIntake`, which:
+
+- resolves a workspace-confined CSV, JSON, JSONL, or Parquet file through
+  `WorkspaceSourceReader`;
+- profiles the full source in chunks and writes the normal quality/info/chunk artifacts;
+- derives issues, assumptions, selected quality metrics, and a conservative draft plan;
+- asks for a destination without writing one.
+
+The run stays in `awaiting_clarification` with `next_action: "confirm"` and exposes the
+assessment payload through `GET /runs/{run_id}`. `POST /runs/{run_id}/confirm` with a
+workspace-relative destination builds a `save_csv` pipeline plan from the draft, rejects a
+destination that would overwrite the source, validates the plan, and moves the run to
+`awaiting_approval`. Approval then executes the validated pipeline through the sandbox.
+
+`mode: "assessment"` is inspection-only: it returns the assessment but never offers
+confirmation. Inline source paths in messages, sampling, assessment caching, draft editing,
+database-backed assessment, and stale-source revalidation are tracked in
+`documents/backlog_v2.txt`.
+
 ## Implemented transformations
 
 The first batch lives in `src/infrastructure/transformations/`. Each function returns a
@@ -310,43 +333,44 @@ The API is created in `src/main.py` and exposes the run contract:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/runs` | Create a run from a message and/or structured plan. Returns `201` with run state. |
-| `GET` | `/runs/{run_id}` | Current status, plan, questions, result, cleanup, and next action. |
+| `POST` | `/runs` | Create a run from a message, source-only request, and/or structured plan. Returns `201` with run state. |
+| `GET` | `/runs/{run_id}` | Current status, plan, assessment, draft plan, questions, result, cleanup, and next action. |
+| `POST` | `/runs/{run_id}/confirm` | Confirm an assessment and supply `{"destination": "output.csv"}`. |
 | `POST` | `/runs/{run_id}/approve` | Approve or reject: `{"approved": true\|false}`. |
 | `POST` | `/runs/{run_id}/cancel` | Request cancellation at the next safe boundary. |
 | `GET` | `/runs/{run_id}/logs` | Structured lifecycle events for the run. |
 | `GET` | `/health` | Liveness and service metadata. |
 
-Example:
+Example (source-only assessment, then confirmation):
 
 ```powershell
 $body = @{
   message = "Assess input.csv"
-  plan = @{
-    plan_version = "1.0"
-    mode = "assessment"
-    run_id = "1729850000000-a1b2c3d4"
-    name = "assess_input"
-    description = "Assess the input"
-    source = @{ operation = "read_csv"; params = @{ path = "input.csv" } }
-    transformations = @()
-    destination = $null
-    chunking = @{ enabled = $true; size = 1000 }
-    on_error = "fail_fast"
-    approval_required = $false
-  }
-} | ConvertTo-Json -Depth 6
+  run_id = "1729850000000-a1b2c3d4"
+  source = "input.csv"
+} | ConvertTo-Json
 
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/runs `
+$run = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/runs `
   -ContentType application/json -Body $body
+$run.assessment.draft_plan
+
+$confirm = @{ destination = "output.csv" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/runs/$($run.run_id)/confirm" `
+  -ContentType application/json -Body $confirm
 ```
+
+A structured `plan` can still be submitted directly with `POST /runs`; it is schema-parsed,
+validated, and executed the same way.
 
 Behavior notes:
 
 - Runs that are ready execute on a background thread pool; API requests never wait for
   execution. Approval-gated runs execute after `POST /runs/{run_id}/approve`.
-- Message-only requests currently return `awaiting_clarification` because no plan builder is
-  configured. Submit a structured `plan` to execute.
+- Supplying `source` without a plan or destination runs a synchronous, read-only assessment and
+  returns `awaiting_clarification` with `next_action: "confirm"`. Confirm before approval; the
+  source is never written to.
+- Message-only requests without `source` or `plan` return `awaiting_clarification` because no
+  intent parser is configured. Submit `source` for assessment or a structured `plan` to execute.
 - Plans are schema-parsed, validated, and only then used to create a run. Invalid plans return
   `400`; unknown runs return `404`; state conflicts return `409`. Pipeline plans containing
   writes or destructive steps must set `approval_required: true`; the workflow still derives
@@ -355,8 +379,8 @@ Behavior notes:
 - Request bodies are limited by `AGENT_ETL_MAX_REQUEST_BYTES`. If `AGENT_ETL_API_KEY` is set,
   `/runs` requires `X-API-Key`; `/health` remains public.
 - Results expose status, output count, data availability, and sanitized step errors; raw
-  DataFrames are not serialized into API responses. Assessment/draft-plan payloads and usage
-  metrics arrive with ASM-1/MON-1.
+  DataFrames are not serialized into API responses. Assessments include findings, selected
+  metrics, draft-plan rationale, artifact paths, and missing inputs.
 - Logs are process-local lifecycle events until MON-1 adds transform CSV and execution JSONL
   logging. Rate limiting remains a deployment-level control for production exposure.
 
@@ -380,12 +404,14 @@ for agent behavior.
 src/
   domain/
   application/
+    assessment/
     ports/
     profiling/
     registry/
     use_cases/
     validation/
   infrastructure/
+    assessment/
     profiling/
   interfaces/
   main.py
@@ -399,12 +425,12 @@ documents/
 
 ## Roadmap
 
-`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, and `API-1` are complete: plans are validated
-before execution, the sandbox enforces workspace, network, timeout, and memory limits, the
-workflow bounds clarification, approval, retries, cancellation, and cleanup, PostgreSQL
-sessions are parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL reads are
-chunked with stable identifiers, core quality/info metrics merge from per-chunk state, and the
-FastAPI run contract executes runs in the background. The next v1 item is `ASM-1`
-(source-only assessment and draft plan). Advanced profiling, sampling, reporting, and future
-adapters are tracked in `documents/backlog_v2.txt`. Additional `TRN-0` transformation batches
-remain in progress.
+`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, `ASM-1`, and `API-1` are complete: plans are
+validated before execution, the sandbox enforces workspace, network, timeout, and memory
+limits, the workflow bounds clarification, approval, retries, cancellation, and cleanup,
+PostgreSQL sessions are parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL
+reads are chunked with stable identifiers, core quality/info metrics merge from per-chunk
+state, source-only requests assess and confirm into validated pipeline plans, and the FastAPI
+run contract executes runs in the background. The next v1 items are `TRN-1`, `LOD-1`, `MON-1`,
+and `TST-1`. Advanced profiling, sampling, reporting, and future adapters are tracked in
+`documents/backlog_v2.txt`. Additional `TRN-0` transformation batches remain in progress.

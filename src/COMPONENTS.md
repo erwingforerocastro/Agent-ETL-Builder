@@ -44,6 +44,12 @@ Settings.from_env()
   +--> RegistryStepRunner(module_registry, sandbox)
   |       -> ExecutePlanUseCase(step_runner, plan_validator)
   |
+  +--> FilesystemProfileWriter(workspace / "artifacts")
+  +--> ProfileSourceUseCase(PandasChunkProfiler(), profile_writer)
+  +--> WorkspaceSourceReader(workspace_probe)
+  |       -> AssessSourceUseCase(reader, profile_source)
+  |       -> AssessmentPlanIntakeFactory(assessment)
+  |
   +--> SystemClock()
   +--> InMemoryRunCheckpoint()
   +--> InMemoryApprovalGateway(clock)
@@ -56,11 +62,13 @@ Settings.from_env()
   |
   +--> RunWorkflowFactory(shared workflow adapters)
   +--> SubmittedPlanIntakeFactory()
+  +--> AssessmentPlanIntakeFactory(assessment)
   +--> PydanticPlanParser()
   +--> InMemoryRunLog()
   +--> ThreadPoolRunScheduler(max_workers=4)
   |       -> RunManager(
-               workflow_factory, plan_parser, validator, intake_factory,
+               workflow_factory, plan_parser, validator,
+               intake_factory, assessment_intake_factory,
                checkpoints, run_log, scheduler, clock, cancellation_factory,
              )
   |
@@ -77,9 +85,9 @@ Settings.from_env()
 A `RunWorkflow` instance is intentionally **not** shared between runs: it remembers one
 `run_id` and routes one lifecycle. `RunManager` creates a fresh workflow, a fresh
 cancellation token, and a fresh intake adapter for each run, then schedules execution when
-the run becomes `ready`. `app.state.database` exposes the optional database adapter for
-later ingestion/loading wiring. Profiling is intentionally not wired into `main.py` yet;
-ASM-1 will construct `ProfileSourceUseCase` at the assessment boundary.
+the run becomes `ready`. Source-only requests select `AssessmentPlanIntake`; plan-supplied
+requests use `SubmittedPlanIntake`. `app.state.database` exposes the optional database adapter
+for later ingestion/loading wiring.
 
 ## 3. Domain (`src/domain/`)
 
@@ -102,8 +110,8 @@ ASM-1 will construct `ProfileSourceUseCase` at the assessment boundary.
 | `CleanupPolicy` | `cleanup` removes partial artifacts; `retain` keeps them. |
 | `WorkflowLimits` | Clarification budget, retry budget, approval timeout, backoff, cleanup policy. |
 | `PlanRequest` | User-facing intake request (`run_id`, `thread_id`, message, mode, source, destination). |
-| `PlanIntakeResult` | Either a proposed plan or clarification questions/missing inputs/reason. |
-| `Run` | Immutable run snapshot. `Run.create` and `Run.transition` enforce the allowed state graph and field invariants. |
+| `PlanIntakeResult` | Either a proposed plan, assessment findings, or clarification questions/missing inputs/reason. |
+| `Run` | Immutable run snapshot. `Run.create` and `Run.transition` enforce the allowed state graph and field invariants; an assessment report may be attached. |
 
 ### Profiling entities (`entities/profiling.py`)
 
@@ -118,6 +126,18 @@ ASM-1 will construct `ProfileSourceUseCase` at the assessment boundary.
 
 `ProfileReport.to_info_dict()` is the versioned info-file contract. Accuracy is a
 `not_applicable` metric with value `None`, rendered as `N/A`.
+
+### Assessment entities (`entities/assessment.py`)
+
+| Component | Purpose |
+|---|---|
+| `AssessmentIssue` | One validated finding with code, severity, optional column, and JSON-safe details. |
+| `AssessmentMetric` | Selected quality metric retained in the assessment summary. |
+| `DraftPlan` | Non-executable source, candidate transformations, chunking, and rationale. |
+| `AssessmentReport` | Assessment id, source identity, hashes, counts, issues, assumptions, missing inputs, selected metrics, draft plan, and artifact paths. |
+
+The report is stored on the run snapshot. `Run.assessment_id` is derived from it, so the API can
+return assessment status without a second store.
 
 ### Registry entities (`entities/registry.py`)
 
@@ -174,6 +194,8 @@ last column.
 | `DatabaseSessionPort` | Parameterized fetch/execute/execute-many plus server-side batch iteration. | `PostgresSession` |
 | `ChunkProfilerPort` | Profile one opaque chunk and merge chunk records into a report. | `PandasChunkProfiler` |
 | `ProfileArtifactWriterPort` | Persist per-chunk records, quality CSV, and info JSON. | `FilesystemProfileWriter` |
+| `SourceReaderPort` (assessment) | Resolve a workspace source and stream its ordered chunks. | `WorkspaceSourceReader` |
+| `SourceProfilePort` (assessment) | Profile an ordered chunk stream and persist artifacts. | `ProfileSourceUseCase` |
 
 ## 5. Plan validation (`src/application/validation/`)
 
@@ -248,16 +270,32 @@ ModuleMetadataBuilder
 ModuleMetadata ---> RegistrySnapshot ---> ModuleRegistry ---> application ports
 ```
 
-## 7. Run workflow (`src/application/use_cases/`)
+## 7. Assessment and run workflow (`src/application/use_cases/`)
+
+### Source assessment (`application/assessment/`, `infrastructure/assessment/`)
+
+| Component | Purpose |
+|---|---|
+| `AssessSourceUseCase` | Describes the source, streams full-source chunks through the profiler, and builds an `AssessmentReport`. |
+| `SourceDescriptor` / `AssessmentSettings` | Resolved source metadata and the bounded chunk size. |
+| `build_assessment_report` | Converts a profile into issues, assumptions, selected metrics, missing inputs, and a conservative draft plan. |
+| `build_pipeline_plan` | Confirms a report into a validated `save_csv` pipeline plan; rejects source-overwriting destinations. |
+| `WorkspaceSourceReader` | Workspace-confined CSV/JSON/JSONL/Parquet resolution, hashing, and ordered chunk iteration. |
+| `AssessmentPlanIntake` / factory | Runs assessment during run intake and returns the report plus a destination request. |
+
+Assessment is read-only toward the source. It runs under the sandbox runner, writes only
+profiling artifacts below `artifacts/<run_id>/`, and creates the destination only after
+confirmation and approval. Inline source intent detection, sampling, caching, draft editing,
+and database-backed assessment are v2 candidates.
 
 `RunWorkflow` is a thin facade over four focused collaborators. It owns the run id and routes
 each public operation to the right stage.
 
 | Component | Purpose |
 |---|---|
-| `RunWorkflow` | Public state-machine facade: `start`, `resume`, `run`, `approve`, `cancel`, `get`. |
+| `RunWorkflow` | Public state-machine facade: `start`, `resume`, `confirm`, `run`, `approve`, `cancel`, `get`. |
 | `RunWorkflowFactory` | Assembles one `RunWorkflow` from shared adapters for one run. |
-| `RunManager` | API-facing coordinator: parses/validates plans, creates workflows and tokens, stores outcomes, schedules background execution, logs lifecycle events, and serves status/logs. |
+| `RunManager` | API-facing coordinator: parses/validates plans, selects assessment or submitted intake, creates workflows and tokens, stores outcomes, schedules background execution, logs lifecycle events, and serves status/logs. |
 | `RunIntakeCoordinator` | Intake, clarification/repair loop, validation, plan hashing, approval requirement, and preparation for approval/execution. |
 | `RunApprovalCoordinator` | Waits for a decision, records approve/reject, and maps timeout/cancel/reject to terminal states. |
 | `RunExecutionCoordinator` | Stale-plan checks, cancellation boundaries, bounded retries with backoff, and terminal execution outcomes. |
@@ -273,6 +311,7 @@ created
   +--> awaiting_clarification --(resume)--> awaiting_clarification
   |                         \--> ready
   |                         \--> awaiting_approval
+  |                         \--> (confirm assessment) --> awaiting_approval
   |
   +--> ready ------------------------------> running
   +--> awaiting_approval --(approve)-------> ready
@@ -296,7 +335,8 @@ RunManager.create(command)
   - PydanticPlanParser.parse(plan payload)
   - PlanValidator.validate(plan)
   - resolve run_id/mode
-  - create cancellation token + SubmittedPlanIntake
+  - create cancellation token
+  - source-only? AssessmentPlanIntakeFactory : SubmittedPlanIntakeFactory
   - RunWorkflowFactory.create(...)
   |
   v
@@ -311,6 +351,14 @@ RunWorkflow.start(request) -----> RunStore.save(Run.created)
   |                             - transition ready | awaiting_approval
   |
   +--> status ready? --> BackgroundSchedulerPort.submit(run_id, RunManager._run)
+  |
+  | POST /runs/{id}/confirm (assessment pending)
+  v
+RunManager.confirm(run_id, destination)
+  -> build_pipeline_plan(assessment, destination)
+  -> reject source overwrite + PlanValidator.validate(plan)
+  -> RunWorkflow.confirm(...)
+  -> transition awaiting_approval
   |
   | POST /runs/{id}/approve
   v
@@ -419,6 +467,8 @@ cleanup. Those are deployment-level hardening items.
 | `ingestion/chunking.py` | Deterministic in-memory chunk iteration. |
 | `profiling/pandas_profiler.py` | `PandasChunkProfiler`: per-chunk mergeable state, additive statistics, capped maps, core metrics. |
 | `profiling/artifacts.py` | Atomic per-chunk JSON, quality CSV, and info JSON writer with path/formula-injection guards. |
+| `assessment/source_reader.py` | `WorkspaceSourceReader`: safe source resolution, hashing, and chunk iteration for assessment. |
+| `assessment/intake.py` | `AssessmentPlanIntake` / factory: runs assessment intake and returns the report with missing inputs. |
 | `loaders/csv.py` | CSV destination adapter. |
 
 ### PostgreSQL sessions (`infrastructure/database/`)
@@ -522,16 +572,20 @@ ProfileSourceUseCase.execute(chunks, request)
 |---|---|
 | `app.py` | Creates the FastAPI app, installs error handlers, request-size/optional API-key middleware, health router, and run router. |
 | `routes/health.py` | Returns service metadata. Health is currently a constant `ok`; dependency probes can be added later. |
-| `routes/runs.py` | `POST /runs`, `GET /runs/{id}`, approve, cancel, and logs endpoints. |
-| `schemas/runs.py` | Strict request schemas plus run/plan/result/cleanup/log/error response schemas. |
+| `routes/runs.py` | `POST /runs`, `GET /runs/{id}`, confirm, approve, cancel, and logs endpoints. |
+| `schemas/runs.py` | Strict request schemas plus run/plan/assessment/result/cleanup/log/error response schemas. |
 | `schemas/health.py` | Strict health response schema. |
 | `errors.py` | Maps `EtlError`, request-validation failures, HTTP errors, and unexpected exceptions to `{code, message, retryable, details?}`. |
 
 API behavior:
 
-- `POST /runs` accepts a message and/or a JSON plan. The plan is parsed and validated before
-  a run is created; message-only requests return `awaiting_clarification` until a plan builder
-  is configured.
+- `POST /runs` accepts a message, an explicit `source` for assessment, and/or a JSON plan.
+  Plans are parsed and validated before a run is created. Source-only requests return
+  `awaiting_clarification` with an assessment and `next_action: "confirm"`.
+- `POST /runs/{id}/confirm` supplies the missing destination, builds and validates the pipeline
+  plan, rejects source overwrite, and moves the run to `awaiting_approval`.
+- Message-only requests without `source` or `plan` return `awaiting_clarification` until an
+  intent parser is configured.
 - Ready runs are submitted to `BackgroundSchedulerPort`; approval-gated runs are submitted
   after a successful approval.
 - `RunManager` keeps per-run workflows (which own their cancellation tokens), outcomes, and
@@ -556,6 +610,30 @@ caller
        -> RegistryStepRunner.run_transformation(...) for each step
        -> RegistryStepRunner.run_destination(...)
        -> PlanExecutionResult
+```
+
+### Assess a source and confirm a draft
+
+```text
+POST /runs {source, no plan/destination}
+  -> RunManager selects AssessmentPlanIntake
+  -> AssessSourceUseCase.execute(run_id, source)
+       -> WorkspaceSourceReader.describe(reference)
+       -> WorkspaceSourceReader.iter_chunks(source, chunk_size)
+       -> ProfileSourceUseCase.execute(chunks, ProfileRequest)
+       -> build_assessment_report(profile, artifacts)
+  -> RunWorkflow.start(request)
+       -> RunIntakeCoordinator returns the assessment + missing destination
+       -> run: awaiting_clarification, next_action: confirm
+  -> GET /runs/{id} exposes assessment/draft_plan
+
+POST /runs/{id}/confirm {destination}
+  -> RunManager.confirm(run_id, destination)
+       -> build_pipeline_plan(assessment, destination)
+       -> reject source overwrite
+       -> PlanValidator.validate(plan)
+       -> RunWorkflow.confirm(...) -> awaiting_approval
+  -> normal approval + execution
 ```
 
 ### Profile a source
@@ -599,12 +677,18 @@ POST /runs
        -> PydanticPlanParser.parse(payload)
        -> PlanValidator.validate(plan)
        -> resolve run_id/mode
-       -> SubmittedPlanIntakeFactory.create(plan)
+       -> source-only? AssessmentPlanIntakeFactory : SubmittedPlanIntakeFactory
        -> RunWorkflowFactory.create(intake, cancellation token)
        -> RunWorkflow.start(request)
        -> RunManager stores workflow + RunOutcome
        -> ready? BackgroundSchedulerPort.submit(run_id, RunManager._run)
   -> RunResponse.from_outcome(outcome)
+
+POST /runs/{id}/confirm
+  -> RunManager.confirm(run_id, destination)
+       -> RunWorkflow.confirm(...)
+       -> build/validate pipeline plan; transition awaiting_approval
+  -> RunResponse.from_outcome(...)
 
 GET /runs/{id}
   -> RunManager.outcome(run_id)
@@ -648,6 +732,9 @@ GET /runs/{id}/logs
   `PandasChunkProfiler`, and render it in `ProfileReport.to_info_dict`/the quality writer.
   Never derive a final statistic from per-chunk averages or medians. Declared quality rules
   are deferred to the v2 backlog.
+- **Add an assessment source type:** extend `WorkspaceSourceReader` (or implement
+  `SourceReaderPort`), add the suffix/reader mapping, and cover path confinement plus chunk
+  iteration. Add a `SourceProfilePort` adapter if profiling mechanics change.
 - **Replace plan intake:** implement `PlanIntakePort` and `PlanIntakeFactoryPort`, then wire
   the factory into `RunManager`.
 - **Replace plan parsing:** implement `PlanParserPort` (for example a different schema

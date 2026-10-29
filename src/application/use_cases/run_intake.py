@@ -129,6 +129,7 @@ class RunIntakeCoordinator:
             questions=questions,
             missing_inputs=result.missing_inputs,
             error=None,
+            assessment=result.assessment,
         )
         self._store.save(run)
         return RunOutcome(run)

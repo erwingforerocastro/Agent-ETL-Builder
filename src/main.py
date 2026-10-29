@@ -2,13 +2,17 @@
 
 from pathlib import Path
 
+from application.assessment.assess_source import AssessSourceUseCase
 from application.registry.specs import MODULE_SPECS
 from application.use_cases.execute_plan import ExecutePlanUseCase
+from application.use_cases.profile_source import ProfileSourceUseCase
 from application.use_cases.run_manager import RunManager
 from application.use_cases.run_workflow_factory import RunWorkflowFactory
 from application.validation.plan_validator import PlanValidator
 from domain.entities.run import WorkflowLimits
 from infrastructure.approval.in_memory import InMemoryApprovalGateway
+from infrastructure.assessment.intake import AssessmentPlanIntakeFactory
+from infrastructure.assessment.source_reader import WorkspaceSourceReader
 from infrastructure.cancellation import EventCancellationToken
 from infrastructure.cleanup.filesystem import FilesystemCleanup
 from infrastructure.clock import SystemClock
@@ -18,6 +22,8 @@ from infrastructure.database.postgres import PostgresDatabase
 from infrastructure.interpreter.registry_step_runner import RegistryStepRunner
 from infrastructure.logging.run_log import InMemoryRunLog
 from infrastructure.planning.submitted import SubmittedPlanIntakeFactory
+from infrastructure.profiling.artifacts import FilesystemProfileWriter
+from infrastructure.profiling.pandas_profiler import PandasChunkProfiler
 from infrastructure.registry.bindings import MODULE_FUNCTIONS
 from infrastructure.registry.module_registry import build_module_registry
 from infrastructure.sandbox.executor import SandboxExecutor
@@ -47,14 +53,19 @@ database = (
     else None
 )
 module_registry = build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
+workspace_probe = FilesystemWorkspaceProbe(workspace)
 plan_validator = PlanValidator(
     module_registry,
-    workspace=FilesystemWorkspaceProbe(workspace),
+    workspace=workspace_probe,
     sizer=CanonicalPlanSizer(),
 )
 sandbox = SandboxExecutor(SandboxLimits(), workspace=workspace)
 step_runner = RegistryStepRunner(module_registry, sandbox)
 execute_plan = ExecutePlanUseCase(step_runner, plan_validator)
+profile_writer = FilesystemProfileWriter(workspace / "artifacts")
+profile_source = ProfileSourceUseCase(PandasChunkProfiler(), profile_writer)
+source_reader = WorkspaceSourceReader(workspace_probe)
+assessment = AssessSourceUseCase(source_reader, profile_source, sandbox=sandbox)
 clock = SystemClock()
 run_checkpoint = InMemoryRunCheckpoint()
 approval_gateway = InMemoryApprovalGateway(clock)
@@ -87,6 +98,7 @@ run_manager = RunManager(
     scheduler=run_scheduler,
     clock=clock,
     cancellation_factory=EventCancellationToken,
+    assessment_intake_factory=AssessmentPlanIntakeFactory(assessment),
 )
 app = create_app(
     service_name=settings.service_name,
@@ -100,6 +112,9 @@ app.state.module_registry = module_registry
 app.state.database = database
 app.state.plan_validator = plan_validator
 app.state.execute_plan = execute_plan
+app.state.profile_writer = profile_writer
+app.state.profile_source = profile_source
+app.state.assessment = assessment
 app.state.run_checkpoint = run_checkpoint
 app.state.approval_gateway = approval_gateway
 app.state.cleanup = cleanup

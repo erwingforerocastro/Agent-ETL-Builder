@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from domain.entities.assessment import AssessmentReport, DraftPlan
 from domain.entities.plan import ExecutionPlan, PlanChunking, PlanSource
 from domain.entities.run import (
     ApprovalState,
@@ -52,7 +53,51 @@ def test_run_create_starts_created() -> None:
     assert run.status is RunStatus.CREATED
     assert run.attempt == 0
     assert run.approval_state is ApprovalState.NOT_REQUIRED
+    assert run.assessment is None
+    assert run.assessment_id is None
     assert not run.status.terminal
+
+
+def test_run_preserves_assessment_across_transitions() -> None:
+    assessment = AssessmentReport(
+        assessment_id="asm_run-1",
+        run_id="run-1",
+        source_id="src_abc",
+        source_type="csv",
+        row_count=1,
+        column_count=1,
+        content_hash="sha256:source",
+        schema_hash="sha256:schema",
+        issues=(),
+        assumptions=("The source was read fully.",),
+        missing_inputs=("destination",),
+        draft_plan=DraftPlan(
+            name="assess_src",
+            description="Assess the source",
+            source_operation="read_csv",
+            source_params={"path": "input.csv"},
+            transformations=(),
+            chunking=PlanChunking(enabled=True, size=100),
+        ),
+        chunk_count=1,
+    )
+
+    awaiting = _run().transition(
+        RunStatus.AWAITING_CLARIFICATION,
+        now=_now(),
+        assessment=assessment,
+    )
+    ready = awaiting.transition(
+        RunStatus.READY,
+        now=_now() + timedelta(seconds=1),
+        plan=_plan(),
+        plan_hash="hash-1",
+    )
+
+    assert awaiting.assessment is assessment
+    assert awaiting.assessment_id == "asm_run-1"
+    assert ready.assessment is assessment
+    assert ready.assessment_id == "asm_run-1"
 
 
 def test_run_transitions_to_ready_and_preserves_plan() -> None:

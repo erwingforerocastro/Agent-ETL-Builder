@@ -10,11 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from application.ports.run_log import RunLogEntry
 from application.use_cases.execution_result import PlanExecutionResult
 from application.use_cases.run_outcome import RunOutcome
+from domain.entities.assessment import AssessmentReport
 from domain.entities.plan import ExecutionPlan
-from domain.entities.run import RunStatus
+from domain.entities.run import Run, RunStatus
 from domain.errors import EtlError
 
-NextAction = Literal["provide_plan", "approve", "wait", "none"]
+NextAction = Literal["provide_plan", "confirm", "approve", "wait", "none"]
 
 
 class RunCreateRequest(BaseModel):
@@ -58,6 +59,22 @@ class RunApprovalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     approved: bool
+
+
+class RunConfirmRequest(BaseModel):
+    """Destination supplied when confirming an assessment draft."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    destination: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("destination")
+    @classmethod
+    def _strip_destination(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("destination must not be blank")
+        return stripped
 
 
 class ErrorResponse(BaseModel):
@@ -146,6 +163,109 @@ class PlanResponse(BaseModel):
         )
 
 
+class AssessmentIssueResponse(BaseModel):
+    code: str
+    message: str
+    severity: Literal["info", "warning", "error"]
+    column: str | None
+    details: dict[str, Any]
+
+
+class AssessmentMetricResponse(BaseModel):
+    metric: str
+    subject: str
+    value: float | None
+    status: str
+    approximate: bool
+
+
+class DraftPlanResponse(BaseModel):
+    name: str
+    description: str
+    source_operation: str
+    source_params: dict[str, Any]
+    transformations: list[PlanTransformationResponse]
+    chunking: PlanChunkingResponse
+    rationale: list[str]
+
+
+class AssessmentResponse(BaseModel):
+    assessment_id: str
+    run_id: str
+    source_id: str
+    source_type: str
+    row_count: int
+    column_count: int
+    content_hash: str
+    schema_hash: str | None
+    issues: list[AssessmentIssueResponse]
+    assumptions: list[str]
+    missing_inputs: list[str]
+    quality: list[AssessmentMetricResponse]
+    draft_plan: DraftPlanResponse
+    quality_path: str | None
+    info_path: str | None
+    chunk_count: int
+
+    @classmethod
+    def from_report(cls, report: AssessmentReport) -> AssessmentResponse:
+        draft = report.draft_plan
+        return cls(
+            assessment_id=report.assessment_id,
+            run_id=report.run_id,
+            source_id=report.source_id,
+            source_type=report.source_type,
+            row_count=report.row_count,
+            column_count=report.column_count,
+            content_hash=report.content_hash,
+            schema_hash=report.schema_hash,
+            issues=[
+                AssessmentIssueResponse(
+                    code=issue.code,
+                    message=issue.message,
+                    severity=issue.severity,
+                    column=issue.column,
+                    details=dict(issue.details),
+                )
+                for issue in report.issues
+            ],
+            assumptions=list(report.assumptions),
+            missing_inputs=list(report.missing_inputs),
+            quality=[
+                AssessmentMetricResponse(
+                    metric=metric.metric,
+                    subject=metric.subject,
+                    value=metric.value,
+                    status=metric.status.value,
+                    approximate=metric.approximate,
+                )
+                for metric in report.quality
+            ],
+            draft_plan=DraftPlanResponse(
+                name=draft.name,
+                description=draft.description,
+                source_operation=draft.source_operation,
+                source_params=dict(draft.source_params),
+                transformations=[
+                    PlanTransformationResponse(
+                        step_id=step.step_id,
+                        operation=step.operation,
+                        params=dict(step.params),
+                    )
+                    for step in draft.transformations
+                ],
+                chunking=PlanChunkingResponse(
+                    enabled=draft.chunking.enabled,
+                    size=draft.chunking.size,
+                ),
+                rationale=list(draft.rationale),
+            ),
+            quality_path=report.quality_path,
+            info_path=report.info_path,
+            chunk_count=report.chunk_count,
+        )
+
+
 class ExecutionStepErrorResponse(BaseModel):
     step_id: str | None
     operation: str
@@ -198,6 +318,8 @@ class RunResponse(BaseModel):
     questions: list[str]
     missing_inputs: list[str]
     error: ErrorResponse | None
+    assessment_id: str | None = None
+    assessment: AssessmentResponse | None = None
     created_at: datetime
     updated_at: datetime
     result: ExecutionResultResponse | None = None
@@ -221,6 +343,12 @@ class RunResponse(BaseModel):
             questions=list(run.questions),
             missing_inputs=list(run.missing_inputs),
             error=ErrorResponse.from_error(run.error) if run.error is not None else None,
+            assessment_id=run.assessment_id,
+            assessment=(
+                AssessmentResponse.from_report(run.assessment)
+                if run.assessment is not None
+                else None
+            ),
             created_at=run.created_at,
             updated_at=run.updated_at,
             result=(
@@ -238,7 +366,7 @@ class RunResponse(BaseModel):
                 if outcome.cleanup is not None
                 else None
             ),
-            next_action=_next_action(run.status),
+            next_action=_next_action(run),
         )
 
 
@@ -279,18 +407,24 @@ class RunLogsResponse(BaseModel):
     logs: list[RunLogEntryResponse]
 
 
-def _next_action(status: RunStatus) -> NextAction:
-    if status in {RunStatus.CREATED, RunStatus.AWAITING_CLARIFICATION}:
+def _next_action(run: Run) -> NextAction:
+    if run.status in {RunStatus.CREATED, RunStatus.AWAITING_CLARIFICATION}:
+        if run.assessment is not None and run.mode == "pipeline":
+            return "confirm"
         return "provide_plan"
-    if status is RunStatus.AWAITING_APPROVAL:
+    if run.status is RunStatus.AWAITING_APPROVAL:
         return "approve"
-    if status in {RunStatus.READY, RunStatus.RUNNING, RunStatus.RETRYING}:
+    if run.status in {RunStatus.READY, RunStatus.RUNNING, RunStatus.RETRYING}:
         return "wait"
     return "none"
 
 
 __all__ = [
+    "AssessmentIssueResponse",
+    "AssessmentMetricResponse",
+    "AssessmentResponse",
     "CleanupResponse",
+    "DraftPlanResponse",
     "ErrorResponse",
     "ExecutionResultResponse",
     "ExecutionStepErrorResponse",
@@ -299,6 +433,7 @@ __all__ = [
     "PlanResponse",
     "PlanTransformationResponse",
     "RunApprovalRequest",
+    "RunConfirmRequest",
     "RunCreateRequest",
     "RunLogEntryResponse",
     "RunLogsResponse",
