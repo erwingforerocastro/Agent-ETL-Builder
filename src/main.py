@@ -20,6 +20,7 @@ from infrastructure.config.settings import Settings
 from infrastructure.database.config import PostgresConfig
 from infrastructure.database.postgres import PostgresDatabase
 from infrastructure.interpreter.registry_step_runner import RegistryStepRunner
+from infrastructure.loaders.postgresql import PostgresTableLoader
 from infrastructure.logging.run_log import InMemoryRunLog
 from infrastructure.planning.submitted import SubmittedPlanIntakeFactory
 from infrastructure.profiling.artifacts import FilesystemProfileWriter
@@ -52,6 +53,7 @@ database = (
     if settings.database_url is not None
     else None
 )
+postgres_loader = PostgresTableLoader(database) if database is not None else None
 module_registry = build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
 workspace_probe = FilesystemWorkspaceProbe(workspace)
 plan_validator = PlanValidator(
@@ -110,6 +112,7 @@ app = create_app(
 )
 app.state.module_registry = module_registry
 app.state.database = database
+app.state.postgres_loader = postgres_loader
 app.state.plan_validator = plan_validator
 app.state.execute_plan = execute_plan
 app.state.profile_writer = profile_writer

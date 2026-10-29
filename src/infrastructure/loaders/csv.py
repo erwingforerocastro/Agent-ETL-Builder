@@ -1,13 +1,15 @@
-"""CSV loaders."""
+"""Atomic CSV loader."""
 
 import pandas as pd
 
 from domain.errors import LoadError, SandboxError
+from infrastructure.loaders.atomic import atomic_text
 
 
 def save_csv(df: pd.DataFrame, *, path: str = "output.csv") -> pd.DataFrame:
     try:
-        df.to_csv(path, index=False)
+        with atomic_text(path, newline="") as handle:
+            df.to_csv(handle, index=False)
         return df.copy()
     except SandboxError:
         raise
@@ -18,3 +20,6 @@ def save_csv(df: pd.DataFrame, *, path: str = "output.csv") -> pd.DataFrame:
             module=__name__,
             context={"path": path},
         ) from exc
+
+
+__all__ = ["save_csv"]

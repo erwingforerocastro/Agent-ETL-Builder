@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator, Sequence
 
 import pandas as pd
@@ -10,14 +9,11 @@ from psycopg import sql
 
 from application.ports.database import DatabasePort, QueryResult
 from domain.entities.ingestion import SourceIdentity
+from infrastructure.database.identifiers import validate_identifier
 from infrastructure.ingestion.identifiers import (
     credential_free_uri,
     source_identity_for_frame,
 )
-
-_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_MAX_IDENTIFIER_LENGTH = 63
-_RESERVED_PREFIX = "pg_"
 
 
 class PostgresSourceReader:
@@ -34,7 +30,7 @@ class PostgresSourceReader:
             raise ValueError("canonical_uri must not be blank")
         self._database = database
         self._canonical_uri = credential_free_uri(canonical_uri)
-        self._schema = _validate_identifier(schema, "schema")
+        self._schema = validate_identifier(schema, "schema")
 
     def read(
         self,
@@ -88,7 +84,7 @@ class PostgresSourceReader:
         )
 
     def _query(self, table: str, columns: Sequence[str]) -> str:
-        table_name = _validate_identifier(table, "table")
+        table_name = validate_identifier(table, "table")
         column_names = _column_names(columns)
         selection = (
             sql.SQL("*")
@@ -102,26 +98,17 @@ class PostgresSourceReader:
         return query.as_string(None)
 
     def _source_uri(self, table: str, columns: Sequence[str]) -> str:
-        table_name = _validate_identifier(table, "table")
+        table_name = validate_identifier(table, "table")
         column_names = _column_names(columns)
         selected = ",".join(column_names) or "*"
         return f"{self._canonical_uri}#{self._schema}.{table_name}?columns={selected}"
 
 
 def _column_names(columns: Sequence[str]) -> tuple[str, ...]:
-    names = tuple(_validate_identifier(column, "column") for column in columns)
+    names = tuple(validate_identifier(column, "column") for column in columns)
     if len(set(names)) != len(names):
         raise ValueError("columns must be unique")
     return names
-
-
-def _validate_identifier(value: str, field_name: str) -> str:
-    text = value.strip()
-    if len(text) > _MAX_IDENTIFIER_LENGTH or not _IDENTIFIER_PATTERN.fullmatch(text):
-        raise ValueError(f"{field_name} must be a simple PostgreSQL identifier")
-    if text.lower().startswith(_RESERVED_PREFIX):
-        raise ValueError(f"{field_name} must not use the reserved pg_ prefix")
-    return text
 
 
 def _frame(result: QueryResult) -> pd.DataFrame:

@@ -1,8 +1,8 @@
 # Agent ETL Builder - Backlog (v1)
 
-Version: 1.8
+Version: 1.9
 Scope: v1 delivery only
-Status: TRN-1 complete; LOD-1 next
+Status: LOD-1 complete; MON-1 next
 Last updated: 2026-10-29
 
 Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
@@ -23,7 +23,7 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
 | ASM-1 | P1 | Source-only assessment and draft plan | ING-1, PRF-1, PLN-1, EXE-1 | Source-only intent is detected; read-only full-source assessment runs; draft plan lists issues, assumptions, and missing inputs; no writes; confirmation builds an executable plan. | Done |
 | TRN-0 | P1 | Reusable transformation modules | FND-1 | Separate, deterministic, idempotent modules are added in batches of five; inputs are not mutated; failures use structured errors. | Done |
 | TRN-1 | P1 | Transformation DSL | TRN-0, PLN-1 | Cleansing, casting, standardization, filtering, and imputation are deterministic and idempotent. | Done |
-| LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and PostgreSQL insert/upsert/truncate modes are transactional and safe. | Pending |
+| LOD-1 | P1 | Loaders | ING-1, DB-1 | Atomic file writes and PostgreSQL insert/upsert/truncate modes are transactional and safe. | Done |
 | MON-1 | P1 | Monitoring and errors | FND-1 | Transform CSV, execution JSONL, error taxonomy, redaction, and fallback logging work. | Pending |
 | API-1 | P1 | FastAPI interface | WF-1 | Run create/status/approve/cancel/logs/health endpoints meet the API contract. | Done |
 | TST-1 | P1 | Test and evaluation suite | REG-1, PLN-1, EXE-1, ASM-1 | Unit, integration, edge-case, security, regression, and golden-plan tests pass; core coverage is at least 80%. | Pending |
@@ -69,6 +69,13 @@ Priority: P0 blocks v1, P1 is required for v1. Deferred work is tracked in
   exposes no resume endpoint.
 - `AGENT_ETL_API_KEY` optionally protects `/runs`; rate limiting and production auth
   hardening remain deployment controls.
+- File destinations are atomic overwrite writers. Append mode, compression/encoding options,
+  parent-directory creation, and cross-process file locking are v2 work (`LOD-2`).
+- `PostgresTableLoader` is an adapter, not a plan destination. It requires an existing table
+  and does not auto-create schemas/tables or map DataFrame dtypes (`LOD-3`). Registry execution
+  still denies network access (`DB-2`).
+- Load lineage, checksums, and load artifacts are not recorded yet; they follow with
+  `MON-1`/`LOD-5`.
 - PostgreSQL sessions open one connection per session; connection pooling, pool exhaustion
   handling, and read-only database role grants are deployment concerns. Server-side batch
   iteration is implemented for source reads.

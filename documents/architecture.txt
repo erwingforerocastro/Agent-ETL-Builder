@@ -1,7 +1,7 @@
 # Agent ETL Builder - Architecture
 
-Version: 1.9
-Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, ASM-1, API-1, TRN-0, and TRN-1 implemented; LOD-1 next
+Version: 2.0
+Status: PLN-1, EXE-1, WF-1, DB-1, ING-1, core PRF-1, ASM-1, API-1, TRN-0, TRN-1, and LOD-1 implemented; MON-1 next
 Last updated: 2026-10-29
 Scope: Module organization and runtime boundaries.
 
@@ -74,7 +74,13 @@ are lost when the process restarts. Multiple workers do not share checkpoints.
   roles, unique step IDs, idempotence, no transformation side effects, and cross-parameter
   semantics before execution. Source schema existence and dtype compatibility are still checked
   at execution time because the source schema is not part of the plan.
-- Loaders: atomic file writes and transactional PostgreSQL insert/upsert.
+- Loaders: file destinations write to a temporary file in the target directory and atomically
+  replace the final path. CSV, JSON, JSONL, and Parquet writers share the same mechanism and
+  overwrite existing files. PostgreSQL loading is a transactional adapter with insert, upsert,
+  and truncate-insert modes, validated/quoted identifiers, parameterized values, bounded batch
+  sizes, and full rollback on batch failure. It requires an existing table and is not registered
+  as a plan destination until a configured-connection sandbox policy exists (`DB-2`). Table
+  creation, schema mapping, file append/compression, and load lineage are deferred.
 - Monitoring: transform CSV log, execution JSONL, structured errors, redaction.
 - State and lineage: local in-memory run checkpoints with plan, assessment, approval, hash,
   status, and error state. The API manager keeps execution results in process memory.

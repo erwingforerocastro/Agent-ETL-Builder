@@ -743,6 +743,41 @@ def test_write_without_approval_is_rejected(tmp_path: Path) -> None:
     _assert_code(plan, "PLAN_APPROVAL_REQUIRED", workspace=tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("operation", "path"),
+    [
+        ("save_csv", "output.csv"),
+        ("save_json", "output.json"),
+        ("save_jsonl", "output.jsonl"),
+        ("save_parquet", "output.parquet"),
+    ],
+)
+def test_file_destination_requires_approval(
+    tmp_path: Path,
+    operation: str,
+    path: str,
+) -> None:
+    plan = make_plan(
+        destination=PlanDestination(operation=operation, params={"path": path}),
+        approval_required=False,
+    )
+
+    _assert_code(plan, "PLAN_APPROVAL_REQUIRED", workspace=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["save_csv", "save_json", "save_jsonl", "save_parquet"],
+)
+def test_file_destination_passes_with_approval(tmp_path: Path, operation: str) -> None:
+    plan = make_plan(
+        destination=PlanDestination(operation=operation, params={"path": "output.out"}),
+        approval_required=True,
+    )
+
+    _validator(tmp_path).validate(plan)
+
+
 def test_destructive_transformation_without_approval_is_rejected(tmp_path: Path) -> None:
     plan = make_plan(
         transformations=(

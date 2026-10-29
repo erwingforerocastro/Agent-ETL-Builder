@@ -32,6 +32,8 @@ Settings.from_env()
   |
   +--> PostgresDatabase(PostgresConfig(...)) when database_url is set
   |       -> lazy PostgreSQL sessions (no startup connection)
+  +--> PostgresTableLoader(database) when configured
+  |       -> transactional table loads; not plan-bound yet
   |
   +--> build_module_registry(MODULE_SPECS, MODULE_FUNCTIONS)
   |       -> ModuleRegistry (validated snapshot + allowlisted callables)
@@ -86,8 +88,8 @@ A `RunWorkflow` instance is intentionally **not** shared between runs: it rememb
 `run_id` and routes one lifecycle. `RunManager` creates a fresh workflow, a fresh
 cancellation token, and a fresh intake adapter for each run, then schedules execution when
 the run becomes `ready`. Source-only requests select `AssessmentPlanIntake`; plan-supplied
-requests use `SubmittedPlanIntake`. `app.state.database` exposes the optional database adapter
-for later ingestion/loading wiring.
+requests use `SubmittedPlanIntake`. `app.state.database` exposes the optional database adapter,
+and `app.state.postgres_loader` exposes the transactional table loader for later plan binding.
 
 ## 3. Domain (`src/domain/`)
 
@@ -473,7 +475,11 @@ cleanup. Those are deployment-level hardening items.
 | `profiling/artifacts.py` | Atomic per-chunk JSON, quality CSV, and info JSON writer with path/formula-injection guards. |
 | `assessment/source_reader.py` | `WorkspaceSourceReader`: safe source resolution, hashing, and chunk iteration for assessment. |
 | `assessment/intake.py` | `AssessmentPlanIntake` / factory: runs assessment intake and returns the report with missing inputs. |
-| `loaders/csv.py` | CSV destination adapter. |
+| `loaders/atomic.py` | Temporary-file plus atomic-replace text and binary writer. |
+| `loaders/csv.py` | Atomic CSV destination adapter. |
+| `loaders/json.py` | Atomic JSON and JSON Lines destination adapters. |
+| `loaders/parquet.py` | Atomic Parquet destination adapter. |
+| `loaders/postgresql.py` | `PostgresTableLoader`: transactional insert/upsert/truncate-insert with identifier validation and batching. |
 
 The transformation adapters are copy-on-write, deterministic, and raise structured
 `TransformationError` values. The current set is `drop_duplicate_rows`, `drop_empty_rows`,
@@ -482,6 +488,26 @@ The transformation adapters are copy-on-write, deterministic, and raise structur
 Every transformation must consume the pipeline DataFrame, be idempotent, and declare no side
 effects. `filter_rows`, coercing date normalization, and nulling replacement are destructive
 and require approval.
+
+### Loaders (`infrastructure/loaders/`)
+
+File destinations use `loaders/atomic.py`: a temporary file is created in the destination
+directory, flushed and fsynced, then moved into place with `os.replace`. A failed write removes
+the temporary file and leaves the previous destination untouched. `save_csv`, `save_json`,
+`save_jsonl`, and `save_parquet` overwrite by default; the parent directory must exist.
+
+`PostgresTableLoader` uses `DatabasePort` sessions and supports:
+
+```text
+insert           parameterized batch inserts
+upsert           INSERT ... ON CONFLICT ... DO UPDATE / DO NOTHING
+truncate_insert  TRUNCATE TABLE followed by inserts in the same transaction
+```
+
+Schema, table, and column identifiers are validated and quoted; values are parameterized; rows
+are batched; any batch failure rolls back the whole load. The target table must already exist.
+The loader is not registered as a plan destination until a configured-connection sandbox policy
+exists (`DB-2`).
 
 ### PostgreSQL sessions (`infrastructure/database/`)
 
@@ -730,6 +756,9 @@ GET /runs/{id}/logs
   `ModuleSpec` in `application/registry/specs.py`, bind it in
   `infrastructure/registry/bindings.py`, and add a case to
   `tests/unit/transformations/test_dsl_contract.py`.
+- **Add a file destination:** implement an overwrite loader using `loaders/atomic.py`, add a
+  `ModuleSpec` with a path constraint and side effects, bind it in
+  `infrastructure/registry/bindings.py`, and verify it under the sandbox.
 - **Add a validation rule:** implement `PlanValidationCheck`, add it to
   `build_default_checks`, and add tests for its stable error code.
 - **Replace persistence:** implement `RunCheckpointPort` (for example PostgreSQL) and wire it

@@ -1,6 +1,7 @@
 """Unit tests for CSV loaders."""
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -37,6 +38,31 @@ def test_save_csv_wraps_failures_without_leaking_os_details(tmp_path: Path) -> N
     assert caught.value.code == "LOAD_FAILED"
     assert caught.value.message == "CSV load failed"
     assert caught.value.context == {"path": str(tmp_path)}
+
+
+def test_save_csv_failure_preserves_the_existing_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "output.csv"
+    target.write_text("old", encoding="utf-8")
+
+    def fail_after_partial_write(
+        self: pd.DataFrame,
+        handle: Any,
+        **kwargs: object,
+    ) -> None:
+        del self, kwargs
+        handle.write("partial")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", fail_after_partial_write)
+
+    with pytest.raises(LoadError):
+        save_csv(pd.DataFrame({"name": ["Ada"]}), path=str(target))
+
+    assert target.read_text(encoding="utf-8") == "old"
+    assert list(tmp_path.glob(".*.tmp")) == []
 
 
 def test_save_csv_preserves_sandbox_errors(

@@ -10,6 +10,7 @@ from infrastructure.approval.in_memory import InMemoryApprovalGateway
 from infrastructure.assessment.source_reader import WorkspaceSourceReader
 from infrastructure.cleanup.filesystem import FilesystemCleanup
 from infrastructure.database.postgres import PostgresDatabase
+from infrastructure.loaders.postgresql import PostgresTableLoader
 from infrastructure.logging.run_log import InMemoryRunLog
 from infrastructure.scheduling.thread_pool import ThreadPoolRunScheduler
 from infrastructure.state.run_checkpoint import InMemoryRunCheckpoint
@@ -68,7 +69,10 @@ def test_composition_root_wires_source_assessment() -> None:
 
 def test_composition_root_wires_the_optional_database_adapter() -> None:
     assert main.app.state.database is main.database
+    assert main.app.state.postgres_loader is main.postgres_loader
     if main.settings.database_url is None:
         assert main.database is None
+        assert main.postgres_loader is None
     else:
         assert isinstance(main.database, PostgresDatabase)
+        assert isinstance(main.postgres_loader, PostgresTableLoader)

@@ -141,6 +141,12 @@ def _pipeline_payload(run_id: str) -> dict[str, object]:
     }
 
 
+def _json_pipeline_payload(run_id: str) -> dict[str, object]:
+    payload = _pipeline_payload(run_id)
+    payload["destination"] = {"operation": "save_json", "params": {"path": "output.json"}}
+    return payload
+
+
 def _multi_transform_payload(run_id: str) -> dict[str, object]:
     return {
         "plan_version": "1.0",
@@ -264,6 +270,36 @@ async def test_pipeline_run_executes_transformations_and_loader(tmp_path: Path) 
 
     logs = (await _request(app, "GET", "/runs/run-real-2/logs")).json()
     assert logs["logs"][-1]["event"] == "run_finished"
+
+
+@pytest.mark.anyio
+async def test_pipeline_executes_json_destination(tmp_path: Path) -> None:
+    (tmp_path / "input.csv").write_text("name\n Ada \nBob\n", encoding="utf-8")
+    app, scheduler = _build_app(tmp_path)
+
+    created = await _request(
+        app,
+        "POST",
+        "/runs",
+        json={"message": "Clean", "plan": _json_pipeline_payload("run-real-json")},
+    )
+    assert created.status_code == 201
+    assert created.json()["status"] == "awaiting_approval"
+
+    approved = await _request(
+        app,
+        "POST",
+        "/runs/run-real-json/approve",
+        json={"approved": True},
+    )
+    assert approved.status_code == 200
+
+    scheduler.run_all()
+
+    status = (await _request(app, "GET", "/runs/run-real-json")).json()
+    assert status["status"] == "succeeded"
+    output = pd.read_json(tmp_path / "output.json", orient="records")
+    assert output["name"].tolist() == ["Ada", "Bob"]
 
 
 @pytest.mark.anyio

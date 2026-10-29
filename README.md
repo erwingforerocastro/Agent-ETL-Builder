@@ -4,13 +4,13 @@ Local-first agent that builds validated ETL pipelines from a structured request 
 source-only assessment.
 
 **Status:** FND-1, ST-1, REG-1, PLN-1, EXE-1, WF-1, DB-1, ING-1, PRF-1, ASM-1, API-1, TRN-0,
-and TRN-1 complete. Ten transformations are registered in the versioned allowlist, structured
-plans are validated before execution, and the bounded run workflow handles intake, approval,
-execution, retries, cancellation, and cleanup. The FastAPI run contract exposes the workflow
-with background execution. Source-only requests run a read-only assessment, return a draft
-plan, and confirm into a validated pipeline plan. PostgreSQL connectivity, read-only ingestion
-adapters, and core quality profiling are available. The sandbox is an in-process guard;
-OS-level isolation remains deferred. The next v1 items are LOD-1, MON-1, and TST-1.
+TRN-1, and LOD-1 complete. Ten transformations are registered in the versioned allowlist,
+structured plans are validated before execution, and the bounded run workflow handles intake,
+approval, execution, retries, cancellation, and cleanup. File destinations are atomic, and a
+transactional PostgreSQL table loader adapter is available. The FastAPI run contract exposes
+the workflow with background execution. Source-only requests run a read-only assessment, return
+a draft plan, and confirm into a validated pipeline plan. The sandbox is an in-process guard;
+OS-level isolation remains deferred. The next v1 items are MON-1 and TST-1.
 
 ## Architecture
 
@@ -258,6 +258,25 @@ IDs, idempotence, and cross-parameter rules before execution. Filtering, coercin
 normalization, and nulling replacement require approval because they can remove or destroy
 values.
 
+## Loaders
+
+File destinations write to a temporary file in the destination directory, flush it, and replace
+the final path atomically. A failed write leaves the previous file intact and removes the
+temporary file. Writes overwrite by default and require the destination directory to exist.
+
+| Destination | Behavior |
+|---|---|
+| `save_csv` | Atomic UTF-8 CSV, `index=False`. |
+| `save_json` | Atomic JSON array (`orient="records"`), ISO dates. |
+| `save_jsonl` | Atomic JSON Lines, ISO dates. |
+| `save_parquet` | Atomic Parquet via pyarrow, `index=False`. |
+
+`PostgresTableLoader` is available as an adapter with `insert`, `upsert`, and
+`truncate_insert` modes. It validates and quotes schema/table/column identifiers, parameterizes
+values, batches inserts, and rolls back the entire load if any batch fails. The target table
+must already exist. It is not registered as a plan destination until the sandbox can allow a
+configured database connection (`DB-2`).
+
 ## Module registry
 
 The registry is a static allowlist; it never imports module paths supplied by a user or
@@ -446,13 +465,13 @@ documents/
 
 ## Roadmap
 
-`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, `ASM-1`, `API-1`, `TRN-0`, and `TRN-1` are complete:
-plans are validated before execution, operation roles are enforced, transformation semantics
-and idempotence are checked, the sandbox enforces workspace, network, timeout, and memory
-limits, the workflow bounds clarification, approval, retries, cancellation, and cleanup,
-PostgreSQL sessions are parameterized and transaction-scoped, CSV/JSON/JSONL/Parquet/PostgreSQL
-reads are chunked with stable identifiers, core quality/info metrics merge from per-chunk
-state, source-only requests assess and confirm into validated pipeline plans, and the FastAPI
-run contract executes runs in the background. The next v1 items are `LOD-1`, `MON-1`, and
-`TST-1`. Advanced profiling, sampling, reporting, and future adapters are tracked in
-`documents/backlog_v2.txt`.
+`EXE-1`, `WF-1`, `DB-1`, `ING-1`, `PRF-1`, `ASM-1`, `API-1`, `TRN-0`, `TRN-1`, and `LOD-1` are
+complete: plans are validated before execution, operation roles are enforced, transformation
+semantics and idempotence are checked, the sandbox enforces workspace, network, timeout, and
+memory limits, the workflow bounds clarification, approval, retries, cancellation, and cleanup,
+PostgreSQL sessions are parameterized and transaction-scoped, file destinations are atomic,
+PostgreSQL loads are transactional, CSV/JSON/JSONL/Parquet/PostgreSQL reads are chunked with
+stable identifiers, core quality/info metrics merge from per-chunk state, source-only requests
+assess and confirm into validated pipeline plans, and the FastAPI run contract executes runs in
+the background. The next v1 items are `MON-1` and `TST-1`. Advanced profiling, sampling,
+reporting, and future adapters are tracked in `documents/backlog_v2.txt`.

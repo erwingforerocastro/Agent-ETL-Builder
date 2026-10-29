@@ -8,6 +8,8 @@ from infrastructure.ingestion.csv import read_csv
 from infrastructure.ingestion.json import read_json, read_jsonl
 from infrastructure.ingestion.parquet import read_parquet
 from infrastructure.loaders.csv import save_csv
+from infrastructure.loaders.json import save_json, save_jsonl
+from infrastructure.loaders.parquet import save_parquet
 from infrastructure.transformations.cast_column import cast_column
 from infrastructure.transformations.change_text_case import change_text_case
 from infrastructure.transformations.drop_duplicates import drop_duplicate_rows
@@ -40,6 +42,9 @@ MODULE_FUNCTIONS: Mapping[str, Callable[..., pd.DataFrame]] = {
     "read_jsonl": read_jsonl,
     "read_parquet": read_parquet,
     "save_csv": save_csv,
+    "save_json": save_json,
+    "save_jsonl": save_jsonl,
+    "save_parquet": save_parquet,
 }
 
 

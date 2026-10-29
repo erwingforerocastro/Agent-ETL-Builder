@@ -52,6 +52,9 @@ def test_registry_is_versioned_and_contains_the_approved_modules() -> None:
         "read_jsonl",
         "read_parquet",
         "save_csv",
+        "save_json",
+        "save_jsonl",
+        "save_parquet",
     ]
     assert {module.version for module in snapshot.modules} == {"1.0.0"}
 
@@ -68,9 +71,11 @@ def test_registry_metadata_matches_callable_signatures() -> None:
         assert module.module == function.__module__
         assert module.function == function.__name__
         assert module.output.type == "DataFrame"
-        if module.name != "save_csv":
+        if module.name in {"save_csv", "save_json", "save_jsonl", "save_parquet"}:
+            assert not module.idempotent
+            assert module.side_effects
+        else:
             assert module.idempotent
-        if module.name != "save_csv":
             assert not module.side_effects
         assert module.examples
         if module.name in [
@@ -85,6 +90,9 @@ def test_registry_metadata_matches_callable_signatures() -> None:
             "change_text_case",
             "replace_values",
             "save_csv",
+            "save_json",
+            "save_jsonl",
+            "save_parquet",
         ]:
             assert [item.name for item in module.inputs if item.pipeline_input] == ["df"]
         elif module.name in ["read_csv", "read_json", "read_jsonl", "read_parquet"]:

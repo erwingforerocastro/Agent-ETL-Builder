@@ -1,9 +1,9 @@
 # Agent ETL Builder - Research / Ground Truth
 
-Version: 1.2
+Version: 1.3
 Last verified: 2026-10-29
-Verified code commit: `2f8befe` (TRN-1 transformation DSL; local `main`)
-Verified baseline: 625 passed, 3 skipped, 90.62% coverage; ruff, format, mypy, lock, and sync clean.
+Verified code commit: `2f8befe` plus the LOD-1 batch (local `main`)
+Verified baseline: 665 passed, 3 skipped, 90.49% coverage; ruff, format, mypy, lock, and sync clean.
 
 Purpose: explain how the project actually works today, not how it is planned to work.
 Code and passing tests are authoritative. Planning documents may describe intended behavior.
@@ -36,8 +36,8 @@ source only     -> assess  -> confirm destination -> validate -> approval? -> ex
 Delivery status from `documents/backlog.txt`:
 
 - Done: DOC-1, FND-1, ST-1, DB-1, REG-1, PLN-1, EXE-1, WF-1, ING-1, PRF-1, ASM-1,
-  API-1, TRN-0, TRN-1.
-- Pending: LOD-1, MON-1, TST-1.
+  API-1, TRN-0, TRN-1, LOD-1.
+- Pending: MON-1, TST-1.
 
 ## 2. Runtime in one picture
 
@@ -63,6 +63,8 @@ uvicorn main:app
   +-- AssessSourceUseCase -> WorkspaceSourceReader
                            -> ProfileSourceUseCase -> PandasChunkProfiler
                                                    -> FilesystemProfileWriter
+  |
+  +-- PostgresTableLoader (adapter only; not a registry destination)
 ```
 
 `src/main.py` is the only composition root. It sets:
@@ -163,7 +165,10 @@ Registry version: `1.0.0`. Only these operations can appear in a plan:
 | Transform | `normalize_dates` | Chunkable; parse with mixed formats and format with strftime; coerce is destructive. |
 | Transform | `change_text_case` | Chunkable; lower/upper/title on selected or all text columns. |
 | Transform | `replace_values` | Chunkable; exact text replacement; `new=null` is destructive. |
-| Write | `save_csv` | Writes a CSV file; currently not atomic. |
+| Write | `save_csv` | Atomically overwrites a UTF-8 CSV file. |
+| Write | `save_json` | Atomically overwrites a JSON array (`orient="records"`). |
+| Write | `save_jsonl` | Atomically overwrites JSON Lines. |
+| Write | `save_parquet` | Atomically overwrites Parquet; requires pyarrow. |
 
 Startup rejects duplicate module names, a spec with no bound callable, and a bound callable with
 no spec. There are no database modules in the allowlist.
@@ -244,8 +249,11 @@ artifacts/<run_id>/<source_id>_<source_type>_info.json
 artifacts/<run_id>/<source_id>_<source_type>_profile_chunk_<index>.json
 ```
 
-- Profiling artifact writes use a temporary file plus replace. `save_csv` writes directly with
-  `DataFrame.to_csv`, so loader writes are not yet atomic.
+- Profiling artifact writes use a temporary file plus replace. `save_csv`, `save_json`,
+  `save_jsonl`, and `save_parquet` use the same atomic temp-file-plus-replace mechanism.
+- `PostgresTableLoader` is an adapter with transactional insert/upsert/truncate-insert modes.
+  It requires an existing table and is not exposed as a plan destination because registry
+  execution still denies network access.
 - Logs are lifecycle events only (`run_created`, `run_started`, `run_finished`,
   approval/confirm/cancel events, scheduling failures). Transform CSV and execution JSONL logs
   are not implemented.
@@ -303,9 +311,17 @@ Execution and data:
 - Plan validation cannot inspect the source schema. Column existence, dtype compatibility, and
   all-null behavior are checked by transformation modules during execution. Plan-time
   schema-aware validation is deferred as `TRN-7`.
-- `save_csv` is the only destination and is not atomic.
+- File destinations are `save_csv`, `save_json`, `save_jsonl`, and `save_parquet`. All are
+  atomic overwrite writers. Append mode, compression/encoding options, parent-directory
+  creation, and cross-process file locking are not implemented.
 - `filter_rows`, `normalize_dates` with `errors="coerce"`, and `replace_values` with
   `new=null` are classified as destructive and require approval; assessment plans reject them.
+- A transactional PostgreSQL table loader exists at the adapter level with insert, upsert, and
+  truncate-insert modes. It requires an existing table; automatic table creation, type mapping,
+  and schema-drift handling are deferred (`LOD-3`). It is not a registry destination because
+  registry execution denies network access (`DB-2`).
+- Load lineage, checksums, and load artifacts under `artifacts/<run_id>/` are not implemented;
+  monitoring and lineage are deferred to `MON-1`/`LOD-5`.
 - PostgreSQL read code exists, but no database module is in the registry allowlist. Registry
   execution also denies network access, so validated plans cannot read PostgreSQL yet (DB-2).
 - Assessment covers workspace files only; no database assessment.
@@ -344,12 +360,12 @@ uv lock --check
 uv sync --check
 ```
 
-Last result on 2026-10-29 at commit `2f8befe`:
+Last result on 2026-10-29 at commit `2f8befe` plus the LOD-1 batch:
 
-- `pytest`: 625 passed, 3 skipped, 14.62 s, coverage 90.62% (required 80%).
+- `pytest`: 665 passed, 3 skipped, 18.71 s, coverage 90.49% (required 80%).
 - `ruff check`: clean.
-- `ruff format --check`: 213 files already formatted.
-- `mypy`: no issues in 212 source files.
+- `ruff format --check`: 226 files already formatted.
+- `mypy`: no issues in 225 source files.
 - `uv lock --check` / `uv sync --check`: up to date, no changes.
 - Skips: one PostgreSQL TLS test because the temporary cluster had TLS enabled; two symlink
   tests because symlinks are unavailable on the Windows runner.

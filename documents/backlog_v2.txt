@@ -1,6 +1,6 @@
 # Agent ETL Builder - Backlog (v2 candidates)
 
-Version: 2.3-draft
+Version: 2.4-draft
 Status: Deferred work; not part of v1 acceptance
 Last updated: 2026-10-29
 
@@ -40,6 +40,10 @@ them.
 | WF-2 | P1 | Approval timeout for API-pending runs | The API schedules only `ready` runs; a run left in `awaiting_approval` has no timer that expires it. The configured timeout is enforced only when `RunWorkflow.run()` waits on the decision. | WF-1, API-1 |
 | EXP-1 | P2 | Python export | Fixed-template export is an artifact only and is not on the v1 execution path. | PLN-1, TST-1 |
 | ADP-1 | P2 | Future database adapters | v1 is PostgreSQL-only; MySQL, Oracle, and MongoDB remain future adapters. | LOD-1 |
+| LOD-2 | P2 | File append/compression and locking | v1 file loaders are atomic overwrite-only, use a fixed text encoding, and do not coordinate concurrent writers. | LOD-1, MON-1 |
+| LOD-3 | P2 | PostgreSQL table creation and type mapping | v1 requires an existing table and relies on PostgreSQL to reject incompatible schemas. Create-if-missing, DDL race handling, and DataFrame-to-SQL type mapping are deferred. | LOD-1, DB-1 |
+| LOD-4 | P2 | PostgreSQL registry destination | The transactional loader exists, but registry execution denies network access. Bind it as a plan destination after the configured-connection policy. | LOD-1, DB-2 |
+| LOD-5 | P2 | Load lineage and checksums | v1 records load status only through run state. Per-load manifests, checksums, and artifact lineage follow with monitoring. | LOD-1, MON-1 |
 | OBS-1 | P2 | Dashboards and alerts | Metrics and traces are deployment concerns after MON-1. | MON-1 |
 
 ## Deferred assessment edge cases
@@ -71,6 +75,18 @@ The v1 transformation batch deliberately stays single-column and literal:
 - Filters that target multiple columns in one step; use multiple steps.
 - Plan-time validation against the source schema; v1 checks columns and dtypes at execution.
 - Explicit operation-kind metadata; v1 infers roles from pipeline inputs and side effects.
+
+## Deferred loader edge cases
+
+The v1 loaders intentionally stay minimal:
+
+- File append mode, compression options, explicit encoding/newline controls, and parent-directory
+  creation.
+- Cross-process file locking and concurrent-writer coordination.
+- PostgreSQL table auto-creation, dtype mapping, schema migration, and concurrent DDL races.
+- PostgreSQL registry destinations until the configured-connection sandbox policy exists.
+- Bounded load retries beyond the workflow-level retry policy.
+- Per-load lineage, checksums, and artifact manifests.
 
 ## Deferred profiling edge cases
 
